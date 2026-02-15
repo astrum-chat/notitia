@@ -10,8 +10,6 @@ Notitia separates database operations into two categories:
 
 - **Mutations** (`db.mutate(...)`) — write data via insert, update, and delete operations. When a mutation executes, it broadcasts an event to relevant active subscriptions so they can merge the change into their local data without re-querying.
 
-SQL is an implementation detail — you interact with a fully typed Rust API, and the adapter (e.g. `SqliteAdapter`) handles translation to the underlying database.
-
 ## Quick Start
 
 ### Define Your Schema
