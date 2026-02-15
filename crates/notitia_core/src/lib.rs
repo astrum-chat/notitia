@@ -27,6 +27,9 @@ pub use utils::*;
 mod subscription;
 pub use subscription::*;
 
+mod collection;
+pub use collection::*;
+
 use std::sync::Arc;
 
 pub(crate) struct NotitiaInner<Db, Adptr>

@@ -1,4 +1,4 @@
-use crate::{Datatype, DatatypeConversionError, FieldFilter};
+use crate::{Collection, Datatype, DatatypeConversionError, FieldExpr, FieldFilter, OrderDirection, OrderKey};
 
 use super::{MutationEvent, MutationEventKind, SubscriptionDescriptor};
 
@@ -16,36 +16,8 @@ pub trait SubscribableRow: Clone + PartialEq + Send + Sized + 'static {
     ) -> Result<Self, DatatypeConversionError>;
 }
 
-/// Trait for collection types that can be used with subscriptions.
-///
-/// This allows `merge_event_into_data` to work with any collection type
-/// (e.g. `Vec<T>`, `SmallVec<[T; N]>`, etc.) rather than being hardcoded to `Vec<T>`.
-pub trait SubscribableCollection: Clone + PartialEq + Send + 'static {
-    type Item: SubscribableRow;
-
-    fn push(&mut self, item: Self::Item);
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Self::Item>;
-    fn retain(&mut self, f: impl FnMut(&Self::Item) -> bool);
-}
-
-impl<T: SubscribableRow> SubscribableCollection for Vec<T> {
-    type Item = T;
-
-    fn push(&mut self, item: T) {
-        Vec::push(self, item);
-    }
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        <[T]>::iter_mut(self)
-    }
-
-    fn retain(&mut self, f: impl FnMut(&T) -> bool) {
-        Vec::retain(self, f);
-    }
-}
-
 /// Merge a mutation event into the subscription's local data.
-pub fn merge_event_into_data<C: SubscribableCollection>(
+pub fn merge_event_into_data<C: Collection>(
     data: &mut C,
     descriptor: &SubscriptionDescriptor,
     event: &MutationEvent,
@@ -70,12 +42,11 @@ pub fn merge_event_into_data<C: SubscribableCollection>(
 
 /// For an insert: extract the subscription's selected fields from the inserted row,
 /// construct a new row, and push it into the data.
-fn merge_insert<C: SubscribableCollection>(
+fn merge_insert<C: Collection>(
     data: &mut C,
     descriptor: &SubscriptionDescriptor,
     inserted_values: &[(&'static str, Datatype)],
 ) {
-    // Build an iterator of Datatype values in the order of the subscription's field_names.
     let ordered_values: Vec<Datatype> = descriptor
         .field_names
         .iter()
@@ -94,35 +65,69 @@ fn merge_insert<C: SubscribableCollection>(
         .collect();
 
     if let Ok(row) = C::Item::from_datatypes(&mut ordered_values.into_iter()) {
-        data.push(row);
+        let order_key = order_key_from_values(&descriptor.order_by_field_names, &descriptor.order_by_directions, inserted_values);
+        data.push(row, order_key);
     }
 }
 
+/// Extract an `OrderKey` from named values using the descriptor's order_by field names and directions.
+fn order_key_from_values(
+    order_by_field_names: &[&'static str],
+    order_by_directions: &[OrderDirection],
+    values: &[(&'static str, Datatype)],
+) -> OrderKey {
+    let vals = order_by_field_names
+        .iter()
+        .map(|name| {
+            values
+                .iter()
+                .find_map(
+                    |(col, val)| {
+                        if col == name { Some(val.clone()) } else { None }
+                    },
+                )
+                .unwrap_or(Datatype::Null)
+        })
+        .collect();
+    let reversed = order_by_directions
+        .iter()
+        .map(|d| matches!(d, OrderDirection::Desc))
+        .collect();
+    OrderKey::new(vals, reversed)
+}
+
 /// For an update: find rows that match the mutation's filters and apply the changes.
-fn merge_update<C: SubscribableCollection>(
+/// Uses `FieldExpr::resolve` to evaluate expressions against the current row values.
+fn merge_update<C: Collection>(
     data: &mut C,
     descriptor: &SubscriptionDescriptor,
-    changed: &[(&'static str, Datatype)],
+    changed: &[(&'static str, FieldExpr)],
     mutation_filters: &[FieldFilter],
 ) {
+    // Check if any ORDER BY field was changed.
+    let order_changed = descriptor
+        .order_by_field_names
+        .iter()
+        .any(|name| changed.iter().any(|(col, _)| col == name));
+
+    // Collect deferred order updates to apply after the mutable iteration.
+    let mut deferred_order_updates: Vec<(C::Item, OrderKey)> = Vec::new();
+
     for row in data.iter_mut() {
-        // Check if this row matches the mutation's filters.
         let row_values = row.to_datatypes(&descriptor.field_names);
 
         if !row_matches_mutation_filters(&row_values, mutation_filters) {
             continue;
         }
 
-        // Apply the changed values: reconstruct the row with updated fields.
+        // Apply the changed values using FieldExpr::resolve.
         let updated_values: Vec<Datatype> = descriptor
             .field_names
             .iter()
             .map(|field_name| {
-                // If this field was changed, use the new value.
-                if let Some((_, new_val)) = changed.iter().find(|(col, _)| col == field_name) {
-                    return new_val.clone();
+                if let Some((_, expr)) = changed.iter().find(|(col, _)| col == field_name) {
+                    return expr.resolve(&row_values);
                 }
-                // Otherwise, keep the existing value.
                 row_values
                     .iter()
                     .find_map(|(col, val)| {
@@ -136,9 +141,39 @@ fn merge_update<C: SubscribableCollection>(
             })
             .collect();
 
+        // Compute order key before consuming updated_values.
+        let new_order_key = if order_changed {
+            let all_values: Vec<(&'static str, Datatype)> = descriptor
+                .field_names
+                .iter()
+                .zip(updated_values.iter())
+                .map(|(name, val)| (*name, val.clone()))
+                .chain(
+                    changed
+                        .iter()
+                        .map(|(name, expr)| (*name, expr.resolve(&row_values))),
+                )
+                .collect();
+            Some(order_key_from_values(
+                &descriptor.order_by_field_names,
+                &descriptor.order_by_directions,
+                &all_values,
+            ))
+        } else {
+            None
+        };
+
         if let Ok(updated_row) = C::Item::from_datatypes(&mut updated_values.into_iter()) {
+            if let Some(ref order_key) = new_order_key {
+                deferred_order_updates.push((updated_row.clone(), order_key.clone()));
+            }
             *row = updated_row;
         }
+    }
+
+    // Apply deferred order updates.
+    for (item, order_key) in deferred_order_updates {
+        data.update_order(&item, order_key);
     }
 }
 
@@ -172,7 +207,7 @@ pub(crate) fn row_from_insert<T: SubscribableRow>(
 pub(crate) fn merge_update_single_row<T: SubscribableRow>(
     row: &mut T,
     descriptor: &SubscriptionDescriptor,
-    changed: &[(&'static str, Datatype)],
+    changed: &[(&'static str, FieldExpr)],
     mutation_filters: &[FieldFilter],
 ) -> bool {
     let row_values = row.to_datatypes(&descriptor.field_names);
@@ -185,8 +220,8 @@ pub(crate) fn merge_update_single_row<T: SubscribableRow>(
         .field_names
         .iter()
         .map(|field_name| {
-            if let Some((_, new_val)) = changed.iter().find(|(col, _)| col == field_name) {
-                return new_val.clone();
+            if let Some((_, expr)) = changed.iter().find(|(col, _)| col == field_name) {
+                return expr.resolve(&row_values);
             }
             row_values
                 .iter()
@@ -212,7 +247,7 @@ pub(crate) fn merge_update_single_row<T: SubscribableRow>(
 }
 
 /// For a delete: remove rows that match the mutation's filters.
-fn merge_delete<C: SubscribableCollection>(
+fn merge_delete<C: Collection>(
     data: &mut C,
     descriptor: &SubscriptionDescriptor,
     mutation_filters: &[FieldFilter],
@@ -236,7 +271,6 @@ pub(crate) fn row_matches_mutation_filters(
             .iter()
             .find_map(|(col, val)| if *col == column { Some(val) } else { None })
         else {
-            // Row doesn't have this column — can't confirm match, be conservative.
             continue;
         };
 

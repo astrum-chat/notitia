@@ -33,7 +33,8 @@ impl SubscriptionRegistry {
     pub fn broadcast(&self, event: &MutationEvent) {
         let mut subscribers = self.subscribers.lock().unwrap();
         subscribers.retain(|entry| {
-            if !super::overlap::event_matches_descriptor(event, &entry.descriptor) {
+            let matches = super::overlap::event_matches_descriptor(event, &entry.descriptor);
+            if !matches {
                 return true; // not relevant, but still alive
             }
             (entry.notify)(event) // returns false if channel disconnected

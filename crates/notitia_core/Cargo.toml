@@ -7,6 +7,7 @@ edition = "2024"
 enum-assoc = "1.3.0"
 phf = { version = "0.13.1", features = ["macros"] }
 unions.workspace = true
+ordered_map.workspace = true
 derivative = "2.2.0"
 smallvec = "1.15.1"
 sea-query = "0.32.7"

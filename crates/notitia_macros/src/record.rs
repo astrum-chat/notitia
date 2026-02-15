@@ -47,7 +47,6 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let field_ty = &field.ty;
         let field_attrs = field.attrs.as_slice();
 
-        // Check if field has primary_key or unique attribute
         if get_attr_idx(field_attrs, "db", "primary_key").is_some() {
             quote! {
                 (#field_name, <notitia::PrimaryKey<#field_ty> as notitia::AsDatatypeKind>::as_datatype_kind())
@@ -160,7 +159,6 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let builder_name = Ident::new(&format!("{}Builder", name), Span::call_site());
 
-    // Collect field info for builder: (field_name_ident, generic_ident, raw_type, is_primary_key, is_unique)
     struct BuilderFieldInfo {
         field_name: Ident,
         generic_ident: Ident,
@@ -168,7 +166,6 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         is_primary_key: bool,
         is_unique: bool,
         is_optional: bool,
-        /// For Option<T> fields, this is T. For others, same as raw_ty.
         option_inner_ty: Option<proc_macro2::TokenStream>,
     }
 
@@ -213,38 +210,34 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Builder struct fields: optional fields use their concrete type, others use generics
+    // Builder struct fields: optional fields use Option<FieldExpr>, others use generics
     let builder_struct_fields = builder_fields.iter().map(|f| {
         let fname = &f.field_name;
         if f.is_optional {
-            let raw_ty = &f.raw_ty;
-            quote! { #fname: #raw_ty }
+            quote! { #fname: Option<notitia::FieldExpr> }
         } else {
             let gi = &f.generic_ident;
             quote! { #fname: #gi }
         }
     });
 
-    // Generic idents only (no defaults) for impl blocks — only non-optional fields
     let builder_generic_idents: Vec<_> = builder_fields
         .iter()
         .filter(|f| !f.is_optional)
         .map(|f| &f.generic_ident)
         .collect();
 
-    // Setter methods — one per field
+    // Setter methods accept `impl Into<FieldExpr>`, transition generic to FieldExpr.
     let builder_setter_methods = builder_fields.iter().enumerate().map(|(idx, f)| {
         let fname = &f.field_name;
-        let raw_ty = &f.raw_ty;
 
-        // Build the return type generics (only non-optional fields participate)
         let return_generics: Vec<_> = builder_fields
             .iter()
             .enumerate()
             .filter(|(_, fj)| !fj.is_optional)
             .map(|(j, fj)| {
-                if j == idx {
-                    raw_ty.clone()
+                if j == idx && !f.is_optional {
+                    quote! { notitia::FieldExpr }
                 } else {
                     let gi = &fj.generic_ident;
                     quote! { #gi }
@@ -252,7 +245,6 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        // Build the struct initialization: use `value` for this field, `self.field` for others
         let struct_init_fields = builder_fields.iter().enumerate().map(|(j, fj)| {
             let fj_name = &fj.field_name;
             if j == idx {
@@ -266,15 +258,8 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         });
 
-        // For optional fields, the setter accepts the inner type
-        let setter_param_ty = if f.is_optional {
-            f.option_inner_ty.as_ref().unwrap().clone()
-        } else {
-            raw_ty.clone()
-        };
-
         quote! {
-            pub fn #fname(self, value: impl Into<#setter_param_ty>) -> #builder_name<#(#return_generics),*> {
+            pub fn #fname(self, value: impl Into<notitia::FieldExpr>) -> #builder_name<#(#return_generics),*> {
                 #builder_name {
                     #(#struct_init_fields),*
                 }
@@ -282,32 +267,67 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
-    // Concrete types for the BuiltRecord impl (only non-optional fields)
+    // BuiltRecord: all non-optional fields are FieldExpr
     let builder_concrete_types: Vec<_> = builder_fields
         .iter()
         .filter(|f| !f.is_optional)
-        .map(|f| &f.raw_ty)
+        .map(|_| quote! { notitia::FieldExpr })
         .collect();
 
-    // finish() body: construct the record, wrapping PrimaryKey/Unique fields
+    // finish() extracts Literal values via TryFrom<Datatype>
     let finish_fields = builder_fields.iter().map(|f| {
         let fname = &f.field_name;
+        let raw_ty = &f.raw_ty;
         if f.is_primary_key {
-            quote! { #fname: notitia::PrimaryKey::new(self.#fname) }
+            quote! {
+                #fname: {
+                    let notitia::FieldExpr::Literal(val) = self.#fname else {
+                        panic!("BuiltRecord::finish only supports literal field values");
+                    };
+                    notitia::PrimaryKey::new(<#raw_ty as TryFrom<notitia::Datatype>>::try_from(val).unwrap())
+                }
+            }
         } else if f.is_unique {
-            quote! { #fname: notitia::Unique::new(self.#fname) }
+            quote! {
+                #fname: {
+                    let notitia::FieldExpr::Literal(val) = self.#fname else {
+                        panic!("BuiltRecord::finish only supports literal field values");
+                    };
+                    notitia::Unique::new(<#raw_ty as TryFrom<notitia::Datatype>>::try_from(val).unwrap())
+                }
+            }
+        } else if f.is_optional {
+            let inner_ty = f.option_inner_ty.as_ref().unwrap();
+            quote! {
+                #fname: self.#fname.and_then(|expr| {
+                    let notitia::FieldExpr::Literal(val) = expr else {
+                        panic!("BuiltRecord::finish only supports literal field values");
+                    };
+                    match val {
+                        notitia::Datatype::Null => None,
+                        other => Some(<#inner_ty as TryFrom<notitia::Datatype>>::try_from(other).unwrap()),
+                    }
+                })
+            }
         } else {
-            quote! { #fname: self.#fname }
+            quote! {
+                #fname: {
+                    let notitia::FieldExpr::Literal(val) = self.#fname else {
+                        panic!("BuiltRecord::finish only supports literal field values");
+                    };
+                    <#raw_ty as TryFrom<notitia::Datatype>>::try_from(val).unwrap()
+                }
+            }
         }
     });
 
-    // PartialRecord impl generics: non-optional fields get MaybeSet bound
+    // PartialRecord impl
     let partial_record_generic_params: Vec<_> = builder_fields
         .iter()
         .filter(|f| !f.is_optional)
         .map(|f| {
             let gi = &f.generic_ident;
-            quote! { #gi: notitia::MaybeSet }
+            quote! { #gi: notitia::MaybeSetExpr }
         })
         .collect();
 
@@ -327,21 +347,20 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let fname_str = fname.to_string();
             if f.is_optional {
                 quote! {
-                    if let Some(val) = self.#fname {
-                        fields.push((#fname_str, val.into()));
+                    if let Some(expr) = self.#fname {
+                        fields.push((#fname_str, expr));
                     }
                 }
             } else {
                 quote! {
-                    if let Some(val) = notitia::MaybeSet::into_datatype(self.#fname) {
-                        fields.push((#fname_str, val));
+                    if let Some(expr) = notitia::MaybeSetExpr::into_field_expr(self.#fname) {
+                        fields.push((#fname_str, expr));
                     }
                 }
             }
         })
         .collect();
 
-    // build() init fields: optional fields get None, others get UnsetField
     let build_init_fields = builder_fields.iter().map(|f| {
         let fname = &f.field_name;
         if f.is_optional {
@@ -401,7 +420,7 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         impl<#(#partial_record_generic_params),*> notitia::PartialRecord for #builder_name<#(#partial_record_generic_args),*> {
             type FieldKind = #module_name::#table_field_enum_name;
 
-            fn into_set_datatypes(self) -> Vec<(&'static str, notitia::Datatype)> {
+            fn into_set_fields(self) -> Vec<(&'static str, notitia::FieldExpr)> {
                 let mut fields = Vec::new();
                 #(#partial_record_field_pushes)*
                 fields

@@ -2,6 +2,11 @@ mod kind;
 
 pub use kind::*;
 
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
+
+use smallvec::SmallVec;
+
 use crate::{PrimaryKey, Unique};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,21 +118,121 @@ impl std::fmt::Display for DatatypeConversionError {
 
 impl std::error::Error for DatatypeConversionError {}
 
-impl PartialOrd for Datatype {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match (self, other) {
-            (Datatype::Int(a), Datatype::Int(b)) => a.partial_cmp(b),
-            (Datatype::Int(a), Datatype::BigInt(b)) => (*a as i64).partial_cmp(b),
-            (Datatype::BigInt(a), Datatype::Int(b)) => a.partial_cmp(&(*b as i64)),
-            (Datatype::BigInt(a), Datatype::BigInt(b)) => a.partial_cmp(b),
-            (Datatype::Float(a), Datatype::Float(b)) => a.partial_cmp(b),
-            (Datatype::Float(a), Datatype::Double(b)) => (*a as f64).partial_cmp(b),
-            (Datatype::Double(a), Datatype::Float(b)) => a.partial_cmp(&(*b as f64)),
-            (Datatype::Double(a), Datatype::Double(b)) => a.partial_cmp(b),
-            (Datatype::Text(a), Datatype::Text(b)) => a.partial_cmp(b),
-            (Datatype::Bool(a), Datatype::Bool(b)) => a.partial_cmp(b),
-            _ => None,
+impl Datatype {
+    fn discriminant(&self) -> u8 {
+        match self {
+            Datatype::Null => 0,
+            Datatype::Bool(_) => 1,
+            Datatype::Int(_) => 2,
+            Datatype::BigInt(_) => 3,
+            Datatype::Float(_) => 4,
+            Datatype::Double(_) => 5,
+            Datatype::Text(_) => 6,
+            Datatype::Blob(_) => 7,
         }
+    }
+}
+
+impl Eq for Datatype {}
+
+impl Hash for Datatype {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.discriminant().hash(state);
+        match self {
+            Datatype::Int(v) => v.hash(state),
+            Datatype::BigInt(v) => v.hash(state),
+            Datatype::Float(v) => v.to_bits().hash(state),
+            Datatype::Double(v) => v.to_bits().hash(state),
+            Datatype::Text(v) => v.hash(state),
+            Datatype::Blob(v) => v.hash(state),
+            Datatype::Bool(v) => v.hash(state),
+            Datatype::Null => {}
+        }
+    }
+}
+
+impl PartialOrd for Datatype {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Datatype {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Datatype::Int(a), Datatype::Int(b)) => a.cmp(b),
+            (Datatype::Int(a), Datatype::BigInt(b)) => (*a as i64).cmp(b),
+            (Datatype::BigInt(a), Datatype::Int(b)) => a.cmp(&(*b as i64)),
+            (Datatype::BigInt(a), Datatype::BigInt(b)) => a.cmp(b),
+            (Datatype::Float(a), Datatype::Float(b)) => a.total_cmp(b),
+            (Datatype::Float(a), Datatype::Double(b)) => (*a as f64).total_cmp(b),
+            (Datatype::Double(a), Datatype::Float(b)) => a.total_cmp(&(*b as f64)),
+            (Datatype::Double(a), Datatype::Double(b)) => a.total_cmp(b),
+            (Datatype::Text(a), Datatype::Text(b)) => a.cmp(b),
+            (Datatype::Blob(a), Datatype::Blob(b)) => a.cmp(b),
+            (Datatype::Bool(a), Datatype::Bool(b)) => a.cmp(b),
+            (Datatype::Null, Datatype::Null) => Ordering::Equal,
+            _ => self.discriminant().cmp(&other.discriminant()),
+        }
+    }
+}
+
+/// An order key extracted from ORDER BY columns in a query result.
+/// Used by `OrderedMap` to maintain sorted iteration order.
+///
+/// Each component has an associated direction flag. When `reversed[i]` is true,
+/// the comparison for that component is reversed (for ORDER BY ... DESC).
+#[derive(Clone, Debug)]
+pub struct OrderKey {
+    pub values: SmallVec<[Datatype; 1]>,
+    pub reversed: SmallVec<[bool; 1]>,
+}
+
+impl OrderKey {
+    pub fn new(values: SmallVec<[Datatype; 1]>, reversed: SmallVec<[bool; 1]>) -> Self {
+        Self { values, reversed }
+    }
+
+    /// Construct an all-ascending OrderKey (backwards compatible).
+    pub fn asc(values: SmallVec<[Datatype; 1]>) -> Self {
+        let len = values.len();
+        Self {
+            values,
+            reversed: smallvec::smallvec![false; len],
+        }
+    }
+}
+
+impl PartialEq for OrderKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+
+impl Eq for OrderKey {}
+
+impl Hash for OrderKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.values.hash(state);
+    }
+}
+
+impl PartialOrd for OrderKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        for (i, (a, b)) in self.values.iter().zip(other.values.iter()).enumerate() {
+            let cmp = a.cmp(b);
+            if cmp != Ordering::Equal {
+                let is_reversed = self.reversed.get(i).copied().unwrap_or(false);
+                return if is_reversed { cmp.reverse() } else { cmp };
+            }
+        }
+        self.values.len().cmp(&other.values.len())
     }
 }
 

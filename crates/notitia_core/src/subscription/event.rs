@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use crate::{Datatype, FieldFilter};
+use crate::{Datatype, FieldExpr, FieldFilter};
 
 #[derive(Clone, Debug)]
 pub struct MutationEvent {
@@ -15,8 +15,8 @@ pub enum MutationEventKind {
         values: Vec<(&'static str, Datatype)>,
     },
     Update {
-        /// Only the columns that were set, with new values.
-        changed: Vec<(&'static str, Datatype)>,
+        /// Only the columns that were set, with their expressions.
+        changed: Vec<(&'static str, FieldExpr)>,
         /// The filters on the UPDATE statement (which rows were targeted).
         filters: SmallVec<[FieldFilter; 1]>,
     },

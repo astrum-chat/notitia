@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 notitia_core.workspace = true
 notitia_macros.workspace = true
+ordered_map.workspace = true
 phf = { version = "0.13.1", features = ["macros"] }
 
 [features]

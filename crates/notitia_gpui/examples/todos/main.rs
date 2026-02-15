@@ -86,8 +86,8 @@ impl Render for Main {
                                     TodosDatabase::TODOS.insert(
                                         Todo::build()
                                             .id(UniqueId::new())
-                                            .title(&title)
-                                            .content(&content)
+                                            .title(title.as_str())
+                                            .content(content.as_str())
                                             .completed(false),
                                     ),
                                 )

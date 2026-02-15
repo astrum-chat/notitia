@@ -5,8 +5,8 @@ use smallvec::{SmallVec, smallvec};
 use unions::IsUnion;
 
 use crate::{
-    Database, FieldFilter, FieldKindGroup, SelectStmtBuildable, SelectStmtFilterable,
-    SelectStmtJoinable,
+    Database, FieldFilter, FieldKindGroup, OrderBy, SelectStmtBuildable, SelectStmtFilterable,
+    SelectStmtJoinable, SelectStmtOrderable,
 };
 
 #[derive(Derivative)]
@@ -80,6 +80,25 @@ where
         SmallVec<[FieldFilter; 1]>,
     ) {
         (self.tables, self.fields, smallvec![])
+    }
+}
+
+impl<Db, FieldUnion, FieldPath, Fields> SelectStmtOrderable<Db, FieldUnion, FieldPath, Fields>
+    for SelectStmtSelect<Db, FieldUnion, FieldPath, Fields>
+where
+    Db: Database,
+    FieldUnion: IsUnion,
+    Fields: FieldKindGroup<FieldUnion, FieldPath>,
+{
+    fn tables_fields_filters_and_orders(
+        self,
+    ) -> (
+        SmallVec<[&'static str; 2]>,
+        Fields,
+        SmallVec<[FieldFilter; 1]>,
+        SmallVec<[OrderBy; 1]>,
+    ) {
+        (self.tables, self.fields, smallvec![], smallvec![])
     }
 }
 

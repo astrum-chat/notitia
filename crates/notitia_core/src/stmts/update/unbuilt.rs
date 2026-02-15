@@ -52,7 +52,7 @@ where
         MutationEvent {
             table_name: self.table_name,
             kind: MutationEventKind::Update {
-                changed: self.partial.clone().into_set_datatypes(),
+                changed: self.partial.clone().into_set_fields(),
                 filters: SmallVec::new(),
             },
         }

@@ -36,6 +36,18 @@ where
     ) -> Result<<Mode as SelectStmtFetchMode<Fields::Type>>::Output, Adptr::Error> {
         self.stmt.execute(&self.db).await
     }
+
+    /// Extract the subscription descriptor for this query.
+    /// Used by `notitia_gpui` to compare queries and detect changes.
+    pub fn descriptor(&self) -> SubscriptionDescriptor {
+        SubscriptionDescriptor {
+            tables: self.stmt.tables.clone(),
+            field_names: self.stmt.fields.field_names(),
+            filters: self.stmt.filters.clone(),
+            order_by_field_names: self.stmt.order_by.iter().map(|o| o.field).collect(),
+            order_by_directions: self.stmt.order_by.iter().map(|o| o.direction.clone()).collect(),
+        }
+    }
 }
 
 impl<Db, Adptr, FieldUnion, FieldPath, Fields, Mode>
@@ -59,6 +71,8 @@ where
             tables: self.stmt.tables.clone(),
             field_names: self.stmt.fields.field_names(),
             filters: self.stmt.filters.clone(),
+            order_by_field_names: self.stmt.order_by.iter().map(|o| o.field).collect(),
+            order_by_directions: self.stmt.order_by.iter().map(|o| o.direction.clone()).collect(),
         };
 
         // 3. Create crossbeam channel.

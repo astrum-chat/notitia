@@ -33,7 +33,13 @@ pub fn event_matches_descriptor(event: &MutationEvent, desc: &SubscriptionDescri
                         .any(|f| f.metadata().left.field_name == *col)
                 });
 
-                if !touches_filtered_column {
+                // Also check if the mutation changes an ORDER BY column, which affects
+                // the sort position even if it's not a selected column.
+                let touches_order_column = changed
+                    .iter()
+                    .any(|(col, _)| desc.order_by_field_names.contains(col));
+
+                if !touches_filtered_column && !touches_order_column {
                     return false;
                 }
             }

@@ -8,8 +8,9 @@ use std::{path::Path, sync::Arc};
 
 use notitia_core::{
     Adapter, Database, Datatype, DeleteStmtBuilt, FieldKindGroup, InsertStmtBuilt, Notitia,
-    PartialRecord, Record, SelectStmtBuilt, SelectStmtFetchMode, UpdateStmtBuilt,
+    OrderKey, PartialRecord, Record, SelectStmtBuilt, SelectStmtFetchMode, UpdateStmtBuilt,
 };
+use smallvec::SmallVec;
 use sqlx::{Column, Pool, Row, Sqlite, TypeInfo, sqlite::SqlitePoolOptions};
 use unions::IsUnion;
 
@@ -130,18 +131,53 @@ impl Adapter for SqliteAdapter {
             .fetch_all(self.connection.as_ref())
             .await?;
 
-        let typed_rows: Vec<Fields::Type> = rows
+        let field_names = stmt.fields.field_names();
+        let user_field_count = field_names.len();
+
+        // Build column index mapping for ORDER BY fields.
+        // The SQL columns are: [user_fields..., extra_order_fields...].
+        // ORDER BY fields may be in either region.
+        let mut order_key_indices: SmallVec<[usize; 1]> = SmallVec::new();
+        let mut extra_col_idx = user_field_count;
+        for order in &stmt.order_by {
+            if let Some(pos) = field_names.iter().position(|n| *n == order.field) {
+                order_key_indices.push(pos);
+            } else {
+                order_key_indices.push(extra_col_idx);
+                extra_col_idx += 1;
+            }
+        }
+
+        let (typed_rows, order_keys): (Vec<_>, Vec<_>) = rows
             .into_iter()
             .map(|row| {
-                let values =
-                    (0..row.columns().len()).map(|i| sqlite_row_column_to_datatype(&row, i));
-                Fields::from_datatypes(&mut values.into_iter())
+                let all_values: Vec<Datatype> = (0..row.columns().len())
+                    .map(|i| sqlite_row_column_to_datatype(&row, i))
+                    .collect();
+
+                let order_key = OrderKey::new(
+                    order_key_indices
+                        .iter()
+                        .map(|&idx| all_values[idx].clone())
+                        .collect(),
+                    stmt.order_by
+                        .iter()
+                        .map(|o| matches!(o.direction, notitia_core::OrderDirection::Desc))
+                        .collect(),
+                );
+
+                let user_values: Vec<Datatype> =
+                    all_values.into_iter().take(user_field_count).collect();
+                let typed = Fields::from_datatypes(&mut user_values.into_iter())
+                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                Ok((typed, order_key))
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+            .collect::<Result<Vec<_>, sqlx::Error>>()?
+            .into_iter()
+            .unzip();
 
         stmt.mode
-            .from_rows(typed_rows)
+            .from_rows(typed_rows, order_keys)
             .map_err(|e| sqlx::Error::Protocol(e.to_string()))
     }
 
@@ -159,7 +195,7 @@ impl Adapter for SqliteAdapter {
         &self,
         stmt: UpdateStmtBuilt<Db, Rec, P>,
     ) -> Result<(), Self::Error> {
-        let fields = stmt.partial.into_set_datatypes();
+        let fields = stmt.partial.into_set_fields();
         let sql = update_stmt_to_sql(stmt.table_name, &fields, &stmt.filters);
         sqlx::query(&sql).execute(self.connection.as_ref()).await?;
         Ok(())

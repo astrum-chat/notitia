@@ -1,6 +1,6 @@
 use notitia_core::{
-    Database, Datatype, FieldFilter, FieldFilterMetadata, FieldKindGroup, SelectStmtBuilt,
-    SelectStmtFetchMode,
+    Database, Datatype, FieldFilter, FieldFilterMetadata, FieldKindGroup, OrderDirection,
+    SelectStmtBuilt, SelectStmtFetchMode,
 };
 use sea_query::{Alias, Expr, Query, SimpleExpr, SqliteQueryBuilder};
 use unions::IsUnion;
@@ -51,8 +51,17 @@ where
 {
     let mut query = Query::select();
 
-    for name in stmt.fields.field_names() {
-        query.column(Alias::new(name));
+    let field_names = stmt.fields.field_names();
+    for name in &field_names {
+        query.column(Alias::new(*name));
+    }
+
+    // Add ORDER BY fields not already in the SELECT list so the adapter
+    // can extract them as order keys.
+    for order in &stmt.order_by {
+        if !field_names.contains(&order.field) {
+            query.column(Alias::new(order.field));
+        }
     }
 
     for table in &stmt.tables {
@@ -63,13 +72,28 @@ where
         query.and_where(filter_to_expr(filter));
     }
 
+    for order in &stmt.order_by {
+        let col = Expr::col((Alias::new(order.table), Alias::new(order.field)));
+        match order.direction {
+            OrderDirection::Asc => {
+                query.order_by_expr(col.into(), sea_query::Order::Asc);
+            }
+            OrderDirection::Desc => {
+                query.order_by_expr(col.into(), sea_query::Order::Desc);
+            }
+        }
+    }
+
     query.to_string(SqliteQueryBuilder)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notitia_core::{SelectStmtBuildable, SelectStmtFilterable, SelectStmtSelectable, Table};
+    use notitia_core::{
+        OrderDirection, SelectStmtBuildable, SelectStmtFilterable, SelectStmtOrderable,
+        SelectStmtSelectable, Table,
+    };
     use notitia_macros::{database, record};
 
     #[derive(Debug)]
@@ -188,6 +212,64 @@ mod tests {
         assert_eq!(
             sql,
             r#"SELECT "name" FROM "users" WHERE "users"."age" >= 18 AND "users"."age" < 65"#
+        );
+    }
+
+    #[test]
+    fn select_with_order_by_asc() {
+        let stmt = TestDb::USERS
+            .select(User::NAME)
+            .order_by(User::AGE, OrderDirection::Asc)
+            .fetch_one();
+        let sql = select_stmt_to_sql(&stmt);
+
+        assert_eq!(
+            sql,
+            r#"SELECT "name", "age" FROM "users" ORDER BY "users"."age" ASC"#
+        );
+    }
+
+    #[test]
+    fn select_with_order_by_desc() {
+        let stmt = TestDb::USERS
+            .select(User::NAME)
+            .order_by(User::NAME, OrderDirection::Desc)
+            .fetch_one();
+        let sql = select_stmt_to_sql(&stmt);
+
+        assert_eq!(
+            sql,
+            r#"SELECT "name" FROM "users" ORDER BY "users"."name" DESC"#
+        );
+    }
+
+    #[test]
+    fn select_with_multiple_order_by() {
+        let stmt = TestDb::USERS
+            .select(User::NAME)
+            .order_by(User::AGE, OrderDirection::Desc)
+            .order_by(User::NAME, OrderDirection::Asc)
+            .fetch_one();
+        let sql = select_stmt_to_sql(&stmt);
+
+        assert_eq!(
+            sql,
+            r#"SELECT "name", "age" FROM "users" ORDER BY "users"."age" DESC, "users"."name" ASC"#
+        );
+    }
+
+    #[test]
+    fn select_with_filter_and_order_by() {
+        let stmt = TestDb::USERS
+            .select(User::NAME)
+            .filter(User::AGE.gte(18i64))
+            .order_by(User::NAME, OrderDirection::Asc)
+            .fetch_one();
+        let sql = select_stmt_to_sql(&stmt);
+
+        assert_eq!(
+            sql,
+            r#"SELECT "name" FROM "users" WHERE "users"."age" >= 18 ORDER BY "users"."name" ASC"#
         );
     }
 }

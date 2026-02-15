@@ -4,8 +4,8 @@ use derivative::Derivative;
 use unions::IsUnion;
 
 use crate::{
-    Adapter, Database, DatatypeConversionError, FieldKindGroup, MutationEvent, MutationEventKind,
-    Notitia, SelectStmtBuilt, SubscribableCollection, SubscribableRow, SubscriptionDescriptor,
+    Adapter, Collection, Database, DatatypeConversionError, FieldKindGroup, MutationEvent,
+    MutationEventKind, Notitia, OrderKey, SelectStmtBuilt, SubscribableRow, SubscriptionDescriptor,
     merge_event_into_data,
     subscription::merge::{merge_update_single_row, row_from_insert},
 };
@@ -16,7 +16,11 @@ pub(crate) trait SelectStmtFetchModeSealed {}
 pub trait SelectStmtFetchMode<Ty: Send>: SelectStmtFetchModeSealed + Sized {
     type Output: Send;
 
-    fn from_rows(&self, rows: Vec<Ty>) -> Result<Self::Output, DatatypeConversionError>;
+    fn from_rows(
+        &self,
+        rows: Vec<Ty>,
+        order_keys: Vec<OrderKey>,
+    ) -> Result<Self::Output, DatatypeConversionError>;
 
     /// Apply a mutation event to the output data in place.
     /// Returns `true` if the data was changed.
@@ -48,7 +52,11 @@ pub struct SelectStmtFetchOne {}
 impl<Ty: Send> SelectStmtFetchMode<Ty> for SelectStmtFetchOne {
     type Output = Ty;
 
-    fn from_rows(&self, rows: Vec<Ty>) -> Result<Self::Output, DatatypeConversionError> {
+    fn from_rows(
+        &self,
+        rows: Vec<Ty>,
+        _order_keys: Vec<OrderKey>,
+    ) -> Result<Self::Output, DatatypeConversionError> {
         if rows.len() != 1 {
             return Err(DatatypeConversionError::WrongNumberOfValues {
                 expected: 1,
@@ -112,7 +120,11 @@ pub struct SelectStmtFetchFirst {}
 impl<Ty: Send> SelectStmtFetchMode<Ty> for SelectStmtFetchFirst {
     type Output = Ty;
 
-    fn from_rows(&self, rows: Vec<Ty>) -> Result<Self::Output, DatatypeConversionError> {
+    fn from_rows(
+        &self,
+        rows: Vec<Ty>,
+        _order_keys: Vec<OrderKey>,
+    ) -> Result<Self::Output, DatatypeConversionError> {
         rows.into_iter()
             .next()
             .ok_or(DatatypeConversionError::WrongNumberOfValues {
@@ -169,17 +181,15 @@ impl<Ty: Send> SelectStmtFetchMode<Ty> for SelectStmtFetchFirst {
 
 impl SelectStmtFetchModeSealed for SelectStmtFetchFirst {}
 
-#[allow(private_bounds)] // `FetchCollection` is an internal helper.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct SelectStmtFetchAll<FetchAs: FetchCollection + Send> {
+pub struct SelectStmtFetchAll<FetchAs: Collection> {
     #[doc(hidden)]
     #[derivative(Debug = "ignore")]
     _fetch_group: PhantomData<FetchAs>,
 }
 
-#[allow(private_bounds)] // `FetchCollection` is an internal helper.
-impl<FetchAs: FetchCollection + Send> SelectStmtFetchAll<FetchAs> {
+impl<FetchAs: Collection> SelectStmtFetchAll<FetchAs> {
     pub(crate) fn new() -> Self {
         Self {
             _fetch_group: PhantomData,
@@ -190,16 +200,16 @@ impl<FetchAs: FetchCollection + Send> SelectStmtFetchAll<FetchAs> {
 impl<T, FetchAs> SelectStmtFetchMode<T> for SelectStmtFetchAll<FetchAs>
 where
     T: Send,
-    FetchAs: FetchCollection<Item = T, Output = FetchAs>
-        + SubscribableCollection<Item = T>
-        + Send
-        + Sync,
+    FetchAs: Collection<Item = T> + Send + Sync,
 {
     type Output = FetchAs;
 
-    #[allow(private_interfaces)] // `FetchCollection` is an internal helper.
-    fn from_rows(&self, rows: Vec<T>) -> Result<Self::Output, DatatypeConversionError> {
-        Ok(FetchAs::from_vec(rows))
+    fn from_rows(
+        &self,
+        rows: Vec<T>,
+        order_keys: Vec<OrderKey>,
+    ) -> Result<Self::Output, DatatypeConversionError> {
+        Ok(FetchAs::from_vec(rows, order_keys))
     }
 
     fn merge_event(
@@ -216,7 +226,6 @@ where
         *output != old
     }
 
-    #[allow(private_bounds)] // `FetchCollection` is an internal helper.
     async fn execute<Db, Adptr, FieldUnion, FieldPath, Fields>(
         &self,
         db: &Notitia<Db, Adptr>,
@@ -233,20 +242,18 @@ where
     }
 }
 
-impl<FetchAs: FetchCollection + Send> SelectStmtFetchModeSealed for SelectStmtFetchAll<FetchAs> {}
+impl<FetchAs: Collection> SelectStmtFetchModeSealed for SelectStmtFetchAll<FetchAs> {}
 
-#[allow(private_bounds)] // `FetchCollection` is an internal helper.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct SelectStmtFetchMany<FetchAs: FetchCollection + Send> {
+pub struct SelectStmtFetchMany<FetchAs: Collection> {
     max: usize,
     #[doc(hidden)]
     #[derivative(Debug = "ignore")]
     _fetch_group: PhantomData<FetchAs>,
 }
 
-#[allow(private_bounds)] // `FetchCollection` is an internal helper.
-impl<FetchAs: FetchCollection + Send> SelectStmtFetchMany<FetchAs> {
+impl<FetchAs: Collection> SelectStmtFetchMany<FetchAs> {
     pub(crate) fn new(max: usize) -> Self {
         Self {
             max,
@@ -258,17 +265,18 @@ impl<FetchAs: FetchCollection + Send> SelectStmtFetchMany<FetchAs> {
 impl<T, FetchAs> SelectStmtFetchMode<T> for SelectStmtFetchMany<FetchAs>
 where
     T: Send,
-    FetchAs: FetchCollection<Item = T, Output = FetchAs>
-        + SubscribableCollection<Item = T>
-        + Send
-        + Sync,
+    FetchAs: Collection<Item = T> + Send + Sync,
 {
     type Output = FetchAs;
 
-    #[allow(private_interfaces)] // `FetchCollection` is an internal helper.
-    fn from_rows(&self, rows: Vec<T>) -> Result<Self::Output, DatatypeConversionError> {
+    fn from_rows(
+        &self,
+        rows: Vec<T>,
+        order_keys: Vec<OrderKey>,
+    ) -> Result<Self::Output, DatatypeConversionError> {
+        let truncated_keys: Vec<_> = order_keys.into_iter().take(self.max).collect();
         let truncated: Vec<_> = rows.into_iter().take(self.max).collect();
-        Ok(FetchAs::from_vec(truncated))
+        Ok(FetchAs::from_vec(truncated, truncated_keys))
     }
 
     fn merge_event(
@@ -285,7 +293,6 @@ where
         *output != old
     }
 
-    #[allow(private_bounds)] // `FetchCollection` is an internal helper.
     async fn execute<Db, Adptr, FieldUnion, FieldPath, Fields>(
         &self,
         db: &Notitia<Db, Adptr>,
@@ -302,20 +309,4 @@ where
     }
 }
 
-impl<FetchAs: FetchCollection + Send> SelectStmtFetchModeSealed for SelectStmtFetchMany<FetchAs> {}
-
-pub(crate) trait FetchCollection {
-    type Item: Send;
-    type Output;
-
-    fn from_vec(items: Vec<Self::Item>) -> Self::Output;
-}
-
-impl<T: Send> FetchCollection for Vec<T> {
-    type Item = T;
-    type Output = Vec<T>;
-
-    fn from_vec(items: Vec<T>) -> Vec<T> {
-        items
-    }
-}
+impl<FetchAs: Collection> SelectStmtFetchModeSealed for SelectStmtFetchMany<FetchAs> {}

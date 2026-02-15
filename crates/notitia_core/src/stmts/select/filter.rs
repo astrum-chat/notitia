@@ -5,8 +5,8 @@ use smallvec::SmallVec;
 use unions::{IntoUnion, IsUnion, UnionPath};
 
 use crate::{
-    Database, Datatype, FieldKind, FieldKindGroup, FieldKindOfDatabase, SelectStmtBuildable,
-    StrongFieldKind,
+    Database, Datatype, FieldKind, FieldKindGroup, FieldKindOfDatabase, OrderBy,
+    SelectStmtBuildable, SelectStmtOrderable, StrongFieldKind,
 };
 
 #[derive(Clone, Derivative)]
@@ -89,6 +89,30 @@ where
     }
 }
 
+impl<Db, FieldUnion, FieldPath, Fields> SelectStmtOrderable<Db, FieldUnion, FieldPath, Fields>
+    for SelectStmtFilter<Db, FieldUnion, FieldPath, Fields>
+where
+    Db: Database,
+    FieldUnion: IsUnion,
+    Fields: FieldKindGroup<FieldUnion, FieldPath>,
+{
+    fn tables_fields_filters_and_orders(
+        self,
+    ) -> (
+        SmallVec<[&'static str; 2]>,
+        Fields,
+        SmallVec<[FieldFilter; 1]>,
+        SmallVec<[OrderBy; 1]>,
+    ) {
+        (
+            self.tables,
+            self.fields,
+            self.filters,
+            SmallVec::new(),
+        )
+    }
+}
+
 pub trait SelectStmtFilterable<Db, FieldUnion, FieldPath, Fields>: Sized
 where
     Db: Database,
@@ -162,7 +186,7 @@ impl<F: FieldKind, T: Into<Datatype> + Clone> StrongFieldFilter<F, T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FieldFilter {
     Eq(FieldFilterMetadata),
     Gt(FieldFilterMetadata),
@@ -172,7 +196,7 @@ pub enum FieldFilter {
     Ne(FieldFilterMetadata),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FieldFilterMetadata {
     pub left: TableFieldPair,
     pub right: Datatype,
@@ -184,7 +208,7 @@ impl FieldFilterMetadata {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TableFieldPair {
     pub table_name: &'static str,
     pub field_name: &'static str,
