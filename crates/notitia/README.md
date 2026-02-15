@@ -2,6 +2,8 @@
 
 A type-safe, reactive Rust ORM with compile-time checked queries and built-in live subscriptions.
 
+> In very early development, currently only supports basic queries and mutations.
+
 Notitia separates database operations into two categories:
 
 - **Queries** (`db.query(...)`) — read data. Queries can be executed once with `.execute()`, or turned into live subscriptions with `.subscribe()` that automatically stay in sync as data changes.
