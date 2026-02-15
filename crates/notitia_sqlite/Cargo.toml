@@ -1,0 +1,24 @@
+[package]
+name = "notitia_sqlite"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["runtime-tokio-native-tls"]
+runtime-tokio = ["sqlx/runtime-tokio"]
+runtime-tokio-native-tls = ["sqlx/runtime-tokio-native-tls"]
+runtime-tokio-rustls = ["sqlx/runtime-tokio-rustls"]
+runtime-async-std = ["sqlx/runtime-async-std"]
+runtime-async-std-native-tls = ["sqlx/runtime-async-std-native-tls"]
+runtime-async-std-rustls = ["sqlx/runtime-async-std-rustls"]
+
+[dependencies]
+notitia_core.workspace = true
+phf = { version = "0.13.1", features = ["macros"] }
+sqlx = { version = "0.8.6", features = ["sqlite"] }
+sea-query = "0.32.7"
+unions.workspace = true
+
+[dev-dependencies]
+notitia_macros.workspace = true
+smallvec = "1.15.1"

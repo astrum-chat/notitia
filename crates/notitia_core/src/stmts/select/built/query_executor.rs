@@ -1,0 +1,105 @@
+use std::sync::{Arc, Mutex};
+
+use unions::IsUnion;
+
+use crate::{
+    Adapter, Database, FieldKindGroup, MutationEvent, Notitia, SubscribableRow, Subscription,
+    SubscriptionDescriptor, SubscriptionMetadata, subscription::overlap::event_matches_descriptor,
+};
+
+use super::{SelectStmtBuilt, SelectStmtFetchMode};
+
+pub struct QueryExecutor<Db, Adptr, FieldUnion, FieldPath, Fields, Mode>
+where
+    Db: Database,
+    Adptr: Adapter,
+    FieldUnion: IsUnion,
+    Fields: FieldKindGroup<FieldUnion, FieldPath>,
+    Mode: SelectStmtFetchMode<Fields::Type>,
+{
+    pub(crate) db: Notitia<Db, Adptr>,
+    pub(crate) stmt: SelectStmtBuilt<Db, FieldUnion, FieldPath, Fields, Mode>,
+}
+
+impl<Db, Adptr, FieldUnion, FieldPath, Fields, Mode>
+    QueryExecutor<Db, Adptr, FieldUnion, FieldPath, Fields, Mode>
+where
+    Db: Database,
+    Adptr: Adapter,
+    FieldUnion: IsUnion + Send + Sync,
+    FieldPath: Send + Sync,
+    Fields: FieldKindGroup<FieldUnion, FieldPath> + Send + Sync,
+    Mode: SelectStmtFetchMode<Fields::Type> + Sync,
+{
+    pub async fn execute(
+        self,
+    ) -> Result<<Mode as SelectStmtFetchMode<Fields::Type>>::Output, Adptr::Error> {
+        self.stmt.execute(&self.db).await
+    }
+}
+
+impl<Db, Adptr, FieldUnion, FieldPath, Fields, Mode>
+    QueryExecutor<Db, Adptr, FieldUnion, FieldPath, Fields, Mode>
+where
+    Db: Database,
+    Adptr: Adapter,
+    FieldUnion: IsUnion + Send + Sync,
+    FieldPath: Send + Sync,
+    Fields: FieldKindGroup<FieldUnion, FieldPath> + Send + Sync,
+    Fields::Type: SubscribableRow,
+    Mode: SelectStmtFetchMode<Fields::Type> + Send + Sync + 'static,
+    Mode::Output: Clone + PartialEq + Send + 'static,
+{
+    pub async fn subscribe(self) -> Result<Subscription<Mode::Output>, Adptr::Error> {
+        // 1. Execute the query using the mode's own execute method to get initial data.
+        let initial_output = self.stmt.execute(&self.db).await?;
+
+        // 2. Build subscription descriptor from the statement.
+        let descriptor = SubscriptionDescriptor {
+            tables: self.stmt.tables.clone(),
+            field_names: self.stmt.fields.field_names(),
+            filters: self.stmt.filters.clone(),
+        };
+
+        // 3. Create crossbeam channel.
+        let (sender, receiver) = crossbeam_channel::unbounded();
+
+        // 4. Store the mode's output in Arc<Mutex<_>> for the Subscription to read.
+        let output = Arc::new(Mutex::new(initial_output));
+
+        // 5. Send initial notification.
+        let _ = sender.send(SubscriptionMetadata::None);
+
+        // 6. Build the type-erased notify closure.
+        //    Uses mode.merge_event() to apply changes directly to the output.
+        let notify: Box<dyn Fn(&MutationEvent) -> bool + Send + Sync> = {
+            let output = output.clone();
+            let descriptor = descriptor.clone();
+            let mode = self.stmt.mode;
+            Box::new(move |event: &MutationEvent| {
+                if !event_matches_descriptor(event, &descriptor) {
+                    return true; // still alive, just not relevant
+                }
+
+                let mut data = output.lock().unwrap();
+                let changed = mode.merge_event(&mut *data, &descriptor, event);
+
+                if !changed {
+                    return true;
+                }
+
+                drop(data);
+
+                sender
+                    .send(SubscriptionMetadata::Changed(event.clone()))
+                    .is_ok()
+            })
+        };
+
+        // 7. Register on the Notitia instance.
+        self.db.inner.subscriptions.register(descriptor, notify);
+
+        // 8. Return the subscription handle.
+        Ok(Subscription::new(output, receiver))
+    }
+}

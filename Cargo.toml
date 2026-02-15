@@ -1,0 +1,36 @@
+[package]
+name = "notitia_workspace"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+notitia.workspace = true
+notitia_gpui.workspace = true
+notitia_sqlite = { workspace = true, default-features = true }
+smallvec = "1.15.1"
+
+[dev-dependencies]
+anyhow = "1.0.100"
+tokio = { version = "1.49.0", features = ["full"] }
+
+[workspace]
+members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "crates/notitia_sqlite", "crates/unions", "crates/notitia_gpui"]
+
+[workspace.dependencies]
+# Local.
+# notitia = { path = "crates/notitia" }
+# notitia_core = { path = "crates/notitia_core" }
+# notitia_macros = { path = "crates/notitia_macros" }
+# notitia_sqlite = { path = "crates/notitia_sqlite", default-features = false }
+# notitia_gpui = { path = "crates/notitia_gpui" }
+# unions = { path = "crates/unions" }
+# Public.
+notitia = { git = "https://github.com/astrum-chat/notitia" }
+notitia_core = { git = "https://github.com/astrum-chat/notitia" }
+notitia_macros = { git = "https://github.com/astrum-chat/notitia" }
+notitia_sqlite = { git = "https://github.com/astrum-chat/notitia", default-features = false }
+notitia_gpui = { git = "https://github.com/astrum-chat/notitia" }
+unions = { git = "https://github.com/astrum-chat/notitia" }
+
+[patch.crates-io]
+gpui = { git = "https://github.com/zed-industries/zed" }

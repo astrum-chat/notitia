@@ -1,0 +1,18 @@
+[package]
+name = "notitia"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+notitia_core.workspace = true
+notitia_macros.workspace = true
+phf = { version = "0.13.1", features = ["macros"] }
+
+[features]
+default = ["small_fields"]
+smallvec = ["notitia_core/smallvec"]
+extra_small_fields = ["notitia_core/extra_small_fields"]
+small_fields = ["notitia_core/small_fields"]
+medium_fields = ["notitia_core/medium_fields"]
+large_fields = ["notitia_core/large_fields"]
+extra_large_fields = ["notitia_core/extra_large_fields"]
