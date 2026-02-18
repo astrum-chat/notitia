@@ -1,0 +1,13 @@
+[package]
+name = "zvec-sys"
+version = "0.2.1"
+edition = "2021"
+description = "Raw FFI bindings to zvec C library"
+links = "zvec_c"
+
+[build-dependencies]
+bindgen = "0.70"
+
+[features]
+default = []
+static = []

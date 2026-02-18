@@ -1,4 +1,6 @@
-use crate::{Collection, Datatype, DatatypeConversionError, FieldExpr, FieldFilter, OrderDirection, OrderKey};
+use crate::{
+    Collection, Datatype, DatatypeConversionError, FieldExpr, FieldFilter, OrderDirection, OrderKey,
+};
 
 use super::{MutationEvent, MutationEventKind, SubscriptionDescriptor};
 
@@ -65,7 +67,11 @@ fn merge_insert<C: Collection>(
         .collect();
 
     if let Ok(row) = C::Item::from_datatypes(&mut ordered_values.into_iter()) {
-        let order_key = order_key_from_values(&descriptor.order_by_field_names, &descriptor.order_by_directions, inserted_values);
+        let order_key = order_key_from_values(
+            &descriptor.order_by_field_names,
+            &descriptor.order_by_directions,
+            inserted_values,
+        );
         data.push(row, order_key);
     }
 }
@@ -264,8 +270,7 @@ pub(crate) fn row_matches_mutation_filters(
     mutation_filters: &[FieldFilter],
 ) -> bool {
     for filter in mutation_filters {
-        let meta = filter.metadata();
-        let column = meta.left.field_name;
+        let column = filter.table_field_pair().field_name;
 
         let Some(value) = row_values
             .iter()

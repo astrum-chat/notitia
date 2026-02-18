@@ -30,7 +30,17 @@ pub use subscription::*;
 mod collection;
 pub use collection::*;
 
-use std::sync::Arc;
+#[cfg(feature = "embeddings")]
+pub mod embeddings;
+#[cfg(feature = "embeddings")]
+pub use embeddings::*;
+
+use std::sync::{Arc, OnceLock};
+
+/// General-purpose hook for receiving mutation events.
+pub trait MutationHook: Send + Sync {
+    fn on_event(&self, event: &MutationEvent);
+}
 
 pub(crate) struct NotitiaInner<Db, Adptr>
 where
@@ -40,6 +50,9 @@ where
     database: Db,
     pub(crate) adapter: Adptr,
     pub(crate) subscriptions: SubscriptionRegistry,
+    pub(crate) mutation_hook: OnceLock<Arc<dyn MutationHook>>,
+    #[cfg(feature = "embeddings")]
+    pub(crate) embedding_manager: OnceLock<Arc<EmbeddingManager>>,
 }
 
 pub struct Notitia<Db, Adptr>
@@ -75,12 +88,37 @@ where
                 database,
                 adapter,
                 subscriptions: SubscriptionRegistry::new(),
+                mutation_hook: OnceLock::new(),
+                #[cfg(feature = "embeddings")]
+                embedding_manager: OnceLock::new(),
             }),
         }
     }
 
+    pub fn database(&self) -> &Db {
+        &self.inner.database
+    }
+
+    pub fn set_mutation_hook(&self, hook: Arc<dyn MutationHook>) {
+        let _ = self.inner.mutation_hook.set(hook);
+    }
+
+    #[cfg(feature = "embeddings")]
+    pub fn set_embedding_manager(&self, mgr: Arc<EmbeddingManager>) {
+        let _ = self.inner.mutation_hook.set(mgr.clone());
+        let _ = self.inner.embedding_manager.set(mgr);
+    }
+
+    #[cfg(feature = "embeddings")]
+    pub(crate) fn embedding_manager(&self) -> Option<&Arc<EmbeddingManager>> {
+        self.inner.embedding_manager.get()
+    }
+
     pub fn notify_subscribers(&self, event: &MutationEvent) {
         self.inner.subscriptions.broadcast(event);
+        if let Some(hook) = self.inner.mutation_hook.get() {
+            hook.on_event(event);
+        }
     }
 
     pub fn query<FieldUnion, FieldPath, Fields, Mode>(

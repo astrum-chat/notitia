@@ -31,6 +31,8 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut field_initializers = vec![];
     let mut foreign_relationships = vec![];
     let mut tables_method_items = vec![];
+    let mut embedding_table_entries: Vec<(String, &Type)> = vec![];
+    let _ = &embedding_table_entries; // suppress unused warning when embeddings feature is off
 
     let mut table_kinds = vec![];
     let mut table_kinds_consts = vec![];
@@ -151,6 +153,8 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 });
             }
 
+            embedding_table_entries.push((table_field_name_string.clone(), record_ty));
+
             let record_ty_with_name = RecordTyWithName::new(record_ty, table_field_name_string);
 
             if used_tables.contains(&record_ty_with_name) {
@@ -184,6 +188,34 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
             })
         });
 
+    // Generate embedded_tables() override and embedder-aware connect, gated on embeddings feature.
+    #[cfg(feature = "embeddings")]
+    let embedded_tables_override = {
+        let items = embedding_table_entries
+            .iter()
+            .map(|(table_name, record_ty)| {
+                quote! {
+                    if !#record_ty::_EMBEDDED_FIELDS.is_empty() {
+                        tables.push(notitia::EmbeddedTableDef {
+                            table_name: #table_name,
+                            embedded_fields: #record_ty::_EMBEDDED_FIELDS,
+                            pk_field: #record_ty::_PK_FIELD,
+                        });
+                    }
+                }
+            });
+        quote! {
+            fn embedded_tables(&self) -> Vec<notitia::EmbeddedTableDef> {
+                let mut tables = Vec::new();
+                #(#items)*
+                tables
+            }
+        }
+    };
+
+    #[cfg(not(feature = "embeddings"))]
+    let embedded_tables_override = quote! {};
+
     let expanded = quote! {
         #vis struct #database_name #generics {
             #(#fields),*
@@ -210,6 +242,8 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn tables(&self) -> impl Iterator<Item = (&'static str, notitia::FieldsDef)> {
                 [#(#tables_method_items),*].into_iter()
             }
+
+            #embedded_tables_override
         }
 
         impl #generics #database_name #generics {

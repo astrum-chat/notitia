@@ -4,8 +4,8 @@ use smallvec::SmallVec;
 use unions::{IntoUnion, UnionPath};
 
 use crate::{
-    Adapter, Database, Datatype, DeleteStmtBuilt, FieldKindOfDatabase, Mutation, MutationEvent,
-    MutationEventKind, Notitia, Record, StrongFieldFilter,
+    Adapter, Database, DeleteStmtBuilt, FieldKindOfDatabase, InnerFieldType, Mutation,
+    MutationEvent, MutationEventKind, Notitia, Record, StrongFieldFilter,
 };
 
 pub struct DeleteStmtUnbuilt<Db: Database, Rec: Record> {
@@ -29,7 +29,7 @@ impl<Db: Database, Rec: Record> DeleteStmtUnbuilt<Db, Rec> {
     ) -> DeleteStmtBuilt<Db, Rec>
     where
         Field: FieldKindOfDatabase<Db> + IntoUnion<Rec::FieldKind, FieldPath>,
-        T: Into<Datatype> + Clone,
+        T: InnerFieldType,
     {
         let mut filters = SmallVec::new();
         filters.push(filter.to_weak());

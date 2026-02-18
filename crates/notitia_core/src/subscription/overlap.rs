@@ -30,7 +30,7 @@ pub fn event_matches_descriptor(event: &MutationEvent, desc: &SubscriptionDescri
                 let touches_filtered_column = changed.iter().any(|(col, _)| {
                     desc.filters
                         .iter()
-                        .any(|f| f.metadata().left.field_name == *col)
+                        .any(|f| f.table_field_pair().field_name == *col)
                 });
 
                 // Also check if the mutation changes an ORDER BY column, which affects
@@ -62,8 +62,7 @@ fn insert_matches_filters(
     sub_filters: &[FieldFilter],
 ) -> bool {
     for filter in sub_filters {
-        let meta = filter.metadata();
-        let column = meta.left.field_name;
+        let column = filter.table_field_pair().field_name;
 
         // Find the inserted value for this column.
         let Some(value) = values
@@ -84,21 +83,28 @@ fn insert_matches_filters(
 
 /// Check if a single filter condition is satisfied by a given value.
 pub(crate) fn filter_satisfied_by_value(filter: &FieldFilter, value: &Datatype) -> bool {
-    let expected = &filter.metadata().right;
-
     match filter {
-        FieldFilter::Eq(_) => value == expected,
-        FieldFilter::Ne(_) => value != expected,
-        FieldFilter::Gt(_) => matches!(value.partial_cmp(expected), Some(Ordering::Greater)),
-        FieldFilter::Lt(_) => matches!(value.partial_cmp(expected), Some(Ordering::Less)),
-        FieldFilter::Gte(_) => matches!(
-            value.partial_cmp(expected),
-            Some(Ordering::Greater | Ordering::Equal)
-        ),
-        FieldFilter::Lte(_) => matches!(
-            value.partial_cmp(expected),
-            Some(Ordering::Less | Ordering::Equal)
-        ),
+        FieldFilter::In(m) => m.right.contains(value),
+        _ => {
+            let expected = &filter.metadata().right;
+            match filter {
+                FieldFilter::Eq(_) => value == expected,
+                FieldFilter::Ne(_) => value != expected,
+                FieldFilter::Gt(_) => {
+                    matches!(value.partial_cmp(expected), Some(Ordering::Greater))
+                }
+                FieldFilter::Lt(_) => matches!(value.partial_cmp(expected), Some(Ordering::Less)),
+                FieldFilter::Gte(_) => matches!(
+                    value.partial_cmp(expected),
+                    Some(Ordering::Greater | Ordering::Equal)
+                ),
+                FieldFilter::Lte(_) => matches!(
+                    value.partial_cmp(expected),
+                    Some(Ordering::Less | Ordering::Equal)
+                ),
+                FieldFilter::In(_) => unreachable!(),
+            }
+        }
     }
 }
 
@@ -110,15 +116,13 @@ fn filters_provably_disjoint(
 ) -> bool {
     // For each pair of filters on the same (table, column), check if they're contradictory.
     for sf in sub_filters {
-        let s_meta = sf.metadata();
+        let s_pair = sf.table_field_pair();
 
         for mf in mutation_filters {
-            let m_meta = mf.metadata();
+            let m_pair = mf.table_field_pair();
 
             // Only compare filters on the same table and column.
-            if s_meta.left.table_name != m_meta.left.table_name
-                || s_meta.left.field_name != m_meta.left.field_name
-            {
+            if s_pair.table_name != m_pair.table_name || s_pair.field_name != m_pair.field_name {
                 continue;
             }
 
@@ -133,6 +137,11 @@ fn filters_provably_disjoint(
 
 /// Check if two filters on the same column are provably disjoint.
 fn pair_provably_disjoint(a: &FieldFilter, b: &FieldFilter) -> bool {
+    // In filters need special handling — be conservative.
+    if matches!(a, FieldFilter::In(_)) || matches!(b, FieldFilter::In(_)) {
+        return false;
+    }
+
     let a_val = &a.metadata().right;
     let b_val = &b.metadata().right;
 

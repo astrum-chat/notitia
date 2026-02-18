@@ -11,6 +11,7 @@ phf = { version = "0.13.1", features = ["macros"] }
 
 [features]
 default = ["small_fields"]
+embeddings = ["notitia_core/embeddings", "notitia_macros/embeddings"]
 smallvec = ["notitia_core/smallvec"]
 extra_small_fields = ["notitia_core/extra_small_fields"]
 small_fields = ["notitia_core/small_fields"]

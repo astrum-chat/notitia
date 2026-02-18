@@ -102,6 +102,26 @@ where
     }
 }
 
+#[cfg(feature = "embeddings")]
+impl<Db, FieldUnion, FieldPath, Fields>
+    crate::SelectStmtSearchable<Db, FieldUnion, FieldPath, Fields>
+    for SelectStmtSelect<Db, FieldUnion, FieldPath, Fields>
+where
+    Db: Database,
+    FieldUnion: IsUnion,
+    Fields: FieldKindGroup<FieldUnion, FieldPath>,
+{
+    fn tables_fields_and_filters_for_search(
+        self,
+    ) -> (
+        SmallVec<[&'static str; 2]>,
+        Fields,
+        SmallVec<[FieldFilter; 1]>,
+    ) {
+        (self.tables, self.fields, smallvec![])
+    }
+}
+
 pub trait SelectStmtSelectable<Db, FieldUnion, FieldPath, Fields>:
     SelectStmtJoinable<Db, FieldUnion> + Sized
 where

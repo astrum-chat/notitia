@@ -32,9 +32,74 @@ where
     Mode: SelectStmtFetchMode<Fields::Type> + Sync,
 {
     pub async fn execute(
-        self,
+        #[allow(unused_mut)] mut self,
     ) -> Result<<Mode as SelectStmtFetchMode<Fields::Type>>::Output, Adptr::Error> {
+        #[cfg(feature = "embeddings")]
+        self.resolve_similarity_search();
+
         self.stmt.execute(&self.db).await
+    }
+
+    #[cfg(feature = "embeddings")]
+    fn resolve_similarity_search(&mut self) {
+        use crate::{Datatype, Embedding, FieldFilter, FieldFilterInMetadata, TableFieldPair};
+
+        let search = match self.stmt.similarity_search.take() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mgr = self
+            .db
+            .embedding_manager()
+            .expect("search() used but no EmbeddingManager configured");
+
+        // Resolve Embedding input to a vector
+        let query_vec = match &search.query {
+            Embedding::Text(text) => mgr.embed(text),
+            Embedding::Vector(vec) => vec.clone(),
+        };
+
+        // Phase 1: zvec search — get ranked PKs
+        let results = mgr
+            .similarity_search_vec(
+                search.table_name,
+                search.field_name,
+                &query_vec,
+                search.topk,
+            )
+            .expect("similarity search failed");
+
+        if results.is_empty() {
+            // No results — inject an impossible IN filter to return 0 rows
+            self.stmt
+                .filters
+                .push(FieldFilter::In(FieldFilterInMetadata {
+                    left: TableFieldPair::new(search.table_name, ""),
+                    right: vec![],
+                }));
+            return;
+        }
+
+        // Phase 2: Inject FieldFilter::In for the PK field
+        let pk_field = mgr
+            .pk_field_for_table(search.table_name)
+            .expect("table has no pk field registered in embedding manager");
+
+        let pk_values: Vec<Datatype> = results
+            .iter()
+            .map(|r| Datatype::Text(r.pk.clone()))
+            .collect();
+
+        self.stmt
+            .filters
+            .push(FieldFilter::In(FieldFilterInMetadata {
+                left: TableFieldPair::new(search.table_name, pk_field),
+                right: pk_values,
+            }));
+
+        // Store PK ordering for CASE-based ORDER BY
+        self.stmt.similarity_pk_order = Some(results.iter().map(|r| r.pk.clone()).collect());
     }
 
     /// Extract the subscription descriptor for this query.
@@ -45,7 +110,12 @@ where
             field_names: self.stmt.fields.field_names(),
             filters: self.stmt.filters.clone(),
             order_by_field_names: self.stmt.order_by.iter().map(|o| o.field).collect(),
-            order_by_directions: self.stmt.order_by.iter().map(|o| o.direction.clone()).collect(),
+            order_by_directions: self
+                .stmt
+                .order_by
+                .iter()
+                .map(|o| o.direction.clone())
+                .collect(),
         }
     }
 }
@@ -72,7 +142,12 @@ where
             field_names: self.stmt.fields.field_names(),
             filters: self.stmt.filters.clone(),
             order_by_field_names: self.stmt.order_by.iter().map(|o| o.field).collect(),
-            order_by_directions: self.stmt.order_by.iter().map(|o| o.direction.clone()).collect(),
+            order_by_directions: self
+                .stmt
+                .order_by
+                .iter()
+                .map(|o| o.direction.clone())
+                .collect(),
         };
 
         // 3. Create crossbeam channel.

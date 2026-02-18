@@ -12,9 +12,12 @@ derivative = "2.2.0"
 smallvec = "1.15.1"
 sea-query = "0.32.7"
 crossbeam-channel = "0.5"
+thiserror = "2"
+zvec-bindings = { path = "../zvec-bindings", features = ["sync"], optional = true }
 
 [features]
 default = ["small_fields"]
+embeddings = ["dep:zvec-bindings"]
 smallvec = [ ]
 extra_small_fields = []
 small_fields = []

@@ -1,7 +1,7 @@
 use nanoid::nanoid;
 use notitia::{
-    AsDatatypeKind, Datatype, DatatypeConversionError, DatatypeKind, DatatypeKindMetadata, Table,
-    database, record,
+    AsDatatypeKind, Datatype, DatatypeConversionError, DatatypeKind, DatatypeKindMetadata,
+    InnerFieldType, Table, database, record,
 };
 
 #[database]
@@ -44,4 +44,8 @@ impl TryFrom<Datatype> for UniqueId {
     fn try_from(datatype: Datatype) -> Result<Self, Self::Error> {
         String::try_from(datatype).map(UniqueId)
     }
+}
+
+impl InnerFieldType for UniqueId {
+    type Inner = UniqueId;
 }

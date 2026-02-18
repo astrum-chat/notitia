@@ -9,12 +9,28 @@ notitia_gpui.workspace = true
 notitia_sqlite = { workspace = true, default-features = true }
 smallvec = "1.15.1"
 
+[features]
+default = []
+embeddings = ["notitia/embeddings", "notitia_sqlite/embeddings"]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal"]
+
 [dev-dependencies]
 anyhow = "1.0.100"
+candle-core = "0.9.1"
+candle-nn = "0.9.1"
+candle-transformers = "0.9.1"
+hf-hub = { version = "0.4.3", features = ["tokio"] }
+serde_json = "1.0.145"
+tokenizers = "0.22.1"
 tokio = { version = "1.49.0", features = ["full"] }
 
+[[example]]
+name = "example"
+required-features = ["notitia/embeddings"]
+
 [workspace]
-members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "crates/notitia_sqlite", "crates/unions", "crates/notitia_gpui", "crates/ordered_map"]
+members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "crates/notitia_sqlite", "crates/unions", "crates/notitia_gpui", "crates/ordered_map", "crates/zvec-sys", "crates/zvec-bindings"]
 
 [workspace.dependencies]
 # Local.

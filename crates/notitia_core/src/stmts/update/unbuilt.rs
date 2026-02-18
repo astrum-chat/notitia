@@ -4,8 +4,8 @@ use smallvec::SmallVec;
 use unions::{IntoUnion, UnionPath};
 
 use crate::{
-    Adapter, Database, Datatype, FieldKindOfDatabase, Mutation, MutationEvent, MutationEventKind,
-    Notitia, PartialRecord, Record, StrongFieldFilter, UpdateStmtBuilt,
+    Adapter, Database, FieldKindOfDatabase, InnerFieldType, Mutation, MutationEvent,
+    MutationEventKind, Notitia, PartialRecord, Record, StrongFieldFilter, UpdateStmtBuilt,
 };
 
 pub struct UpdateStmtUnbuilt<Db: Database, Rec: Record, P: PartialRecord> {
@@ -31,7 +31,7 @@ impl<Db: Database, Rec: Record, P: PartialRecord> UpdateStmtUnbuilt<Db, Rec, P> 
     ) -> UpdateStmtBuilt<Db, Rec, P>
     where
         Field: FieldKindOfDatabase<Db> + IntoUnion<Rec::FieldKind, FieldPath>,
-        T: Into<Datatype> + Clone,
+        T: InnerFieldType,
     {
         let mut filters = SmallVec::new();
         filters.push(filter.to_weak());

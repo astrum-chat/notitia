@@ -5,12 +5,10 @@ use smallvec::SmallVec;
 use unions::{IntoUnion, IsUnion, UnionPath};
 
 use crate::{
-    Database, FieldFilter, FieldKindGroup, FieldKindOfDatabase, OrderedCollection, SelectStmtBuilt,
-    SelectStmtFetchAll, SelectStmtFetchFirst, SelectStmtFetchMany, SelectStmtFetchMode,
-    SelectStmtFetchOne, StrongFieldKind,
+    Database, FieldFilter, FieldKindGroup, FieldKindOfDatabase, InnerFieldType, OrderedCollection,
+    SelectStmtBuilt, SelectStmtFetchAll, SelectStmtFetchFirst, SelectStmtFetchMany,
+    SelectStmtFetchMode, SelectStmtFetchOne, StrongFieldKind,
 };
-
-use crate::Datatype;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum OrderDirection {
@@ -67,7 +65,7 @@ where
     fn order_by<
         InnerFieldPath: UnionPath,
         InnerField: FieldKindOfDatabase<Db> + IntoUnion<FieldUnion, InnerFieldPath>,
-        T: Into<Datatype> + Clone,
+        T: InnerFieldType,
     >(
         self,
         field: StrongFieldKind<InnerField, T>,

@@ -6,6 +6,8 @@ use quote::quote;
 use syn::{Fields, GenericArgument, Ident, ItemStruct, PathArguments, Type, parse_macro_input};
 
 use crate::utils::get_attr_idx;
+#[cfg(feature = "embeddings")]
+use crate::utils::get_embed_attr;
 
 /// If `ty` is `Option<T>`, returns `Some(T)`. Otherwise returns `None`.
 fn extract_option_inner(ty: &Type) -> Option<&Type> {
@@ -42,6 +44,13 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let module_name = Ident::new(&format!("notitia_{}", name), Span::call_site());
 
+    // Track the primary key field name for _PK_FIELD const.
+    let mut pk_field_name: Option<String> = None;
+
+    // Collect embed field metadata (field_name, metric_str) for _EMBEDDED_FIELDS const.
+    #[cfg(feature = "embeddings")]
+    let mut embedded_fields_meta: Vec<(String, String)> = Vec::new();
+
     let field_datatype_kinds = fields_named.named.iter().map(|field| {
         let field_name = field.ident.as_ref().unwrap().to_string();
         let field_ty = &field.ty;
@@ -56,6 +65,8 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 (#field_name, <notitia::Unique<#field_ty> as notitia::AsDatatypeKind>::as_datatype_kind())
             }
         } else {
+            // For embed fields, the SQL datatype is the inner type (not Embedded<T>).
+            // AsDatatypeKind for Embedded<T> delegates to T, so this works as-is.
             quote! {
                 (#field_name, <#field_ty as notitia::AsDatatypeKind>::as_datatype_kind())
             }
@@ -71,34 +82,65 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
-    let constructor_fields = fields_named.named.iter().map(|field| {
-        let field_name = &field.ident;
-        let field_vis = &field.vis;
-        let field_ty = &field.ty;
+    let constructor_fields: Vec<_> = fields_named
+        .named
+        .iter()
+        .map(|field| {
+            let field_name = &field.ident;
+            let field_vis = &field.vis;
+            let field_ty = &field.ty;
 
-        let mut field_attrs = field.attrs.iter().collect::<Vec<_>>();
+            let mut field_attrs = field.attrs.iter().collect::<Vec<_>>();
 
-        if let Some(attr_idx) = get_attr_idx(field_attrs.as_slice(), "db", "primary_key") {
-            field_attrs.remove(attr_idx);
+            if let Some(attr_idx) = get_attr_idx(field_attrs.as_slice(), "db", "primary_key") {
+                field_attrs.remove(attr_idx);
 
-            quote! {
-                #(#field_attrs)*
-                #field_vis #field_name: notitia::PrimaryKey<#field_ty>
+                pk_field_name = Some(field_name.as_ref().unwrap().to_string());
+
+                // Also strip embed if present (primary_key takes precedence for wrapping).
+                #[cfg(feature = "embeddings")]
+                if let Some((embed_idx, _)) = get_embed_attr(field_attrs.as_slice(), "db") {
+                    field_attrs.remove(embed_idx);
+                }
+
+                quote! {
+                    #(#field_attrs)*
+                    #field_vis #field_name: notitia::PrimaryKey<#field_ty>
+                }
+            } else if let Some(attr_idx) = get_attr_idx(field_attrs.as_slice(), "db", "unique") {
+                field_attrs.remove(attr_idx);
+
+                // Also strip embed if present.
+                #[cfg(feature = "embeddings")]
+                if let Some((embed_idx, _)) = get_embed_attr(field_attrs.as_slice(), "db") {
+                    field_attrs.remove(embed_idx);
+                }
+
+                quote! {
+                    #(#field_attrs)*
+                    #field_vis #field_name: notitia::Unique<#field_ty>
+                }
+            } else {
+                #[cfg(feature = "embeddings")]
+                if let Some((embed_idx, embed_attr)) = get_embed_attr(field_attrs.as_slice(), "db")
+                {
+                    field_attrs.remove(embed_idx);
+                    let field_name_str = field_name.as_ref().unwrap().to_string();
+                    embedded_fields_meta.push((field_name_str, embed_attr.metric));
+
+                    return quote! {
+                        #(#field_attrs)*
+                        #field_vis #field_name: notitia::Embedded<#field_ty>
+                    };
+                }
+
+                quote! {
+                    #(#field_attrs)*
+                    #field_vis #field_name: #field_ty
+                }
             }
-        } else if let Some(attr_idx) = get_attr_idx(field_attrs.as_slice(), "db", "unique") {
-            field_attrs.remove(attr_idx);
-
-            quote! {
-                #(#field_attrs)*
-                #field_vis #field_name: notitia::Unique<#field_ty>
-            }
-        } else {
-            quote! {
-                #(#field_attrs)*
-                #field_vis #field_name: #field_ty
-            }
-        }
-    });
+        })
+        .collect();
 
     let table_field_enum_name = Ident::new(&format!("{}{}", name, "Field"), Span::call_site());
 
@@ -119,6 +161,23 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         };
 
         let field_ty = &field.ty;
+        let field_attrs = field.attrs.as_slice();
+
+        // The const type must match the rewritten struct field type.
+        let const_ty = if get_attr_idx(field_attrs, "db", "primary_key").is_some() {
+            quote! { notitia::PrimaryKey<#field_ty> }
+        } else if get_attr_idx(field_attrs, "db", "unique").is_some() {
+            quote! { notitia::Unique<#field_ty> }
+        } else {
+            #[cfg(feature = "embeddings")]
+            if get_embed_attr(field_attrs, "db").is_some() {
+                quote! { notitia::Embedded<#field_ty> }
+            } else {
+                quote! { #field_ty }
+            }
+            #[cfg(not(feature = "embeddings"))]
+            quote! { #field_ty }
+        };
 
         let pascal_field_name = Ident::new(
             &field_name.to_string().to_case(convert_case::Case::Pascal),
@@ -133,7 +192,7 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         );
 
         Some(quote! {
-            pub const #upper_snake_field_name: notitia::StrongFieldKind<#module_name::#table_field_enum_name, #field_ty> =
+            pub const #upper_snake_field_name: notitia::StrongFieldKind<#module_name::#table_field_enum_name, #const_ty> =
                 notitia::StrongFieldKind::new(#module_name::#table_field_enum_name::#pascal_field_name)
         })
     });
@@ -165,6 +224,7 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         raw_ty: proc_macro2::TokenStream,
         is_primary_key: bool,
         is_unique: bool,
+        is_embed: bool,
         is_optional: bool,
         option_inner_ty: Option<proc_macro2::TokenStream>,
     }
@@ -182,6 +242,11 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let is_primary_key = get_attr_idx(field_attrs, "db", "primary_key").is_some();
             let is_unique = get_attr_idx(field_attrs, "db", "unique").is_some();
 
+            #[cfg(feature = "embeddings")]
+            let is_embed = get_embed_attr(field_attrs, "db").is_some();
+            #[cfg(not(feature = "embeddings"))]
+            let is_embed = false;
+
             let raw_ty = quote! { #field_ty };
 
             let option_inner = extract_option_inner(field_ty);
@@ -194,6 +259,7 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 raw_ty,
                 is_primary_key,
                 is_unique,
+                is_embed,
                 is_optional,
                 option_inner_ty,
             })
@@ -309,6 +375,15 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 })
             }
+        } else if f.is_embed {
+            quote! {
+                #fname: {
+                    let notitia::FieldExpr::Literal(val) = self.#fname else {
+                        panic!("BuiltRecord::finish only supports literal field values");
+                    };
+                    notitia::Embedded::new(<#raw_ty as TryFrom<notitia::Datatype>>::try_from(val).unwrap())
+                }
+            }
         } else {
             quote! {
                 #fname: {
@@ -370,6 +445,34 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
+    // Generate _PK_FIELD const if a primary key field was found.
+    let pk_field_const = if let Some(ref pk_name) = pk_field_name {
+        quote! {
+            impl #generics #name #generics {
+                pub const _PK_FIELD: &'static str = #pk_name;
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // Generate _EMBEDDED_FIELDS const (always when embeddings feature is on, even if empty).
+    #[cfg(feature = "embeddings")]
+    let embedded_fields_const = {
+        let entries = embedded_fields_meta.iter().map(|(field_name, metric)| {
+            quote! { (#field_name, #metric) }
+        });
+        quote! {
+            impl #generics #name #generics {
+                pub const _EMBEDDED_FIELDS: &'static [(&'static str, &'static str)] = &[
+                    #(#entries),*
+                ];
+            }
+        }
+    };
+    #[cfg(not(feature = "embeddings"))]
+    let embedded_fields_const = quote! {};
+
     let expanded = quote! {
         #[derive(Clone)]
         #vis struct #name #generics {
@@ -379,6 +482,10 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
         impl #generics #name #generics {
             #(#enum_field_consts;)*
         }
+
+        #pk_field_const
+
+        #embedded_fields_const
 
         impl #generics notitia::Record for #name #generics {
             type FieldKind = #module_name::#table_field_enum_name;

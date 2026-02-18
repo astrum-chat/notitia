@@ -9,6 +9,9 @@ pub mod prelude {
         OrderedCollection, SelectStmtBuildable, SelectStmtFilterable, SelectStmtJoinable,
         SelectStmtOrderable, SelectStmtSelectable, Table, database, record,
     };
+
+    #[cfg(feature = "embeddings")]
+    pub use crate::SelectStmtSearchable;
 }
 
 pub use phf;

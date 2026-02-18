@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use unions::{IntoUnion, IsUnion, UnionPath};
 
 use crate::{
-    Database, Datatype, FieldKind, FieldKindGroup, FieldKindOfDatabase, OrderBy,
+    Database, Datatype, FieldKind, FieldKindGroup, FieldKindOfDatabase, InnerFieldType, OrderBy,
     SelectStmtBuildable, SelectStmtOrderable, StrongFieldKind,
 };
 
@@ -104,12 +104,27 @@ where
         SmallVec<[FieldFilter; 1]>,
         SmallVec<[OrderBy; 1]>,
     ) {
-        (
-            self.tables,
-            self.fields,
-            self.filters,
-            SmallVec::new(),
-        )
+        (self.tables, self.fields, self.filters, SmallVec::new())
+    }
+}
+
+#[cfg(feature = "embeddings")]
+impl<Db, FieldUnion, FieldPath, Fields>
+    crate::SelectStmtSearchable<Db, FieldUnion, FieldPath, Fields>
+    for SelectStmtFilter<Db, FieldUnion, FieldPath, Fields>
+where
+    Db: Database,
+    FieldUnion: IsUnion,
+    Fields: FieldKindGroup<FieldUnion, FieldPath>,
+{
+    fn tables_fields_and_filters_for_search(
+        self,
+    ) -> (
+        SmallVec<[&'static str; 2]>,
+        Fields,
+        SmallVec<[FieldFilter; 1]>,
+    ) {
+        (self.tables, self.fields, self.filters)
     }
 }
 
@@ -130,7 +145,7 @@ where
     fn filter<
         InnerFieldPath: UnionPath,
         InnerField: FieldKindOfDatabase<Db> + IntoUnion<FieldUnion, InnerFieldPath>,
-        T: Into<Datatype> + Clone,
+        T: InnerFieldType,
     >(
         self,
         filter: StrongFieldFilter<InnerField, T>,
@@ -143,16 +158,17 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub enum StrongFieldFilter<F: FieldKind, T: Into<Datatype> + Clone> {
+pub enum StrongFieldFilter<F: FieldKind, T: InnerFieldType> {
     Eq(StrongFieldKind<F, T>, Datatype),
     Gt(StrongFieldKind<F, T>, Datatype),
     Lt(StrongFieldKind<F, T>, Datatype),
     Gte(StrongFieldKind<F, T>, Datatype),
     Lte(StrongFieldKind<F, T>, Datatype),
     Ne(StrongFieldKind<F, T>, Datatype),
+    In(StrongFieldKind<F, T>, Vec<Datatype>),
 }
 
-impl<F: FieldKind, T: Into<Datatype> + Clone> StrongFieldFilter<F, T> {
+impl<F: FieldKind, T: InnerFieldType> StrongFieldFilter<F, T> {
     pub(crate) fn to_weak<D: Database>(self) -> FieldFilter
     where
         F: FieldKindOfDatabase<D>,
@@ -182,6 +198,10 @@ impl<F: FieldKind, T: Into<Datatype> + Clone> StrongFieldFilter<F, T> {
                 TableFieldPair::new(F::table_name(), strong_field.kind.name()),
                 datatype,
             )),
+            Self::In(strong_field, datatypes) => FieldFilter::In(FieldFilterInMetadata {
+                left: TableFieldPair::new(F::table_name(), strong_field.kind.name()),
+                right: datatypes,
+            }),
         }
     }
 }
@@ -194,6 +214,13 @@ pub enum FieldFilter {
     Gte(FieldFilterMetadata),
     Lte(FieldFilterMetadata),
     Ne(FieldFilterMetadata),
+    In(FieldFilterInMetadata),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldFilterInMetadata {
+    pub left: TableFieldPair,
+    pub right: Vec<Datatype>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -215,7 +242,7 @@ pub struct TableFieldPair {
 }
 
 impl TableFieldPair {
-    fn new(table_name: &'static str, field_name: &'static str) -> Self {
+    pub fn new(table_name: &'static str, field_name: &'static str) -> Self {
         Self {
             table_name,
             field_name,
@@ -229,6 +256,18 @@ impl FieldFilter {
             Self::Eq(m) | Self::Gt(m) | Self::Lt(m) | Self::Gte(m) | Self::Lte(m) | Self::Ne(m) => {
                 m
             }
+            Self::In(_) => panic!(
+                "FieldFilter::In does not have single-value metadata; use table_field_pair() instead"
+            ),
+        }
+    }
+
+    pub fn table_field_pair(&self) -> &TableFieldPair {
+        match self {
+            Self::Eq(m) | Self::Gt(m) | Self::Lt(m) | Self::Gte(m) | Self::Lte(m) | Self::Ne(m) => {
+                &m.left
+            }
+            Self::In(m) => &m.left,
         }
     }
 }

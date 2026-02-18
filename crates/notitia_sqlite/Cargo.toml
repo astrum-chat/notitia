@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = ["runtime-tokio-native-tls"]
+embeddings = ["notitia_core/embeddings"]
 runtime-tokio = ["sqlx/runtime-tokio"]
 runtime-tokio-native-tls = ["sqlx/runtime-tokio-native-tls"]
 runtime-tokio-rustls = ["sqlx/runtime-tokio-rustls"]

@@ -16,6 +16,9 @@ pub(crate) trait SelectStmtFetchModeSealed {}
 pub trait SelectStmtFetchMode<Ty: Send>: SelectStmtFetchModeSealed + Sized {
     type Output: Send;
 
+    /// Whether the fetch mode needs order keys extracted from query results.
+    fn needs_order_keys(&self) -> bool;
+
     fn from_rows(
         &self,
         rows: Vec<Ty>,
@@ -51,6 +54,10 @@ pub struct SelectStmtFetchOne {}
 
 impl<Ty: Send> SelectStmtFetchMode<Ty> for SelectStmtFetchOne {
     type Output = Ty;
+
+    fn needs_order_keys(&self) -> bool {
+        false
+    }
 
     fn from_rows(
         &self,
@@ -119,6 +126,10 @@ pub struct SelectStmtFetchFirst {}
 
 impl<Ty: Send> SelectStmtFetchMode<Ty> for SelectStmtFetchFirst {
     type Output = Ty;
+
+    fn needs_order_keys(&self) -> bool {
+        false
+    }
 
     fn from_rows(
         &self,
@@ -204,6 +215,10 @@ where
 {
     type Output = FetchAs;
 
+    fn needs_order_keys(&self) -> bool {
+        true
+    }
+
     fn from_rows(
         &self,
         rows: Vec<T>,
@@ -268,6 +283,10 @@ where
     FetchAs: Collection<Item = T> + Send + Sync,
 {
     type Output = FetchAs;
+
+    fn needs_order_keys(&self) -> bool {
+        true
+    }
 
     fn from_rows(
         &self,

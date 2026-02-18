@@ -19,25 +19,35 @@ pub(crate) fn datatype_to_sea_value(datatype: &Datatype) -> sea_query::Value {
 }
 
 pub(crate) fn filter_to_expr(filter: &FieldFilter) -> SimpleExpr {
-    let (metadata, build): (
-        &FieldFilterMetadata,
-        fn(Expr, sea_query::Value) -> SimpleExpr,
-    ) = match filter {
-        FieldFilter::Eq(m) => (m, |col, val| col.eq(val)),
-        FieldFilter::Gt(m) => (m, |col, val| col.gt(val)),
-        FieldFilter::Lt(m) => (m, |col, val| col.lt(val)),
-        FieldFilter::Gte(m) => (m, |col, val| col.gte(val)),
-        FieldFilter::Lte(m) => (m, |col, val| col.lte(val)),
-        FieldFilter::Ne(m) => (m, |col, val| col.ne(val)),
-    };
+    match filter {
+        FieldFilter::In(m) => {
+            let col = Expr::col((Alias::new(m.left.table_name), Alias::new(m.left.field_name)));
+            let values: Vec<sea_query::Value> = m.right.iter().map(datatype_to_sea_value).collect();
+            col.is_in(values)
+        }
+        _ => {
+            let (metadata, build): (
+                &FieldFilterMetadata,
+                fn(Expr, sea_query::Value) -> SimpleExpr,
+            ) = match filter {
+                FieldFilter::Eq(m) => (m, |col, val| col.eq(val)),
+                FieldFilter::Gt(m) => (m, |col, val| col.gt(val)),
+                FieldFilter::Lt(m) => (m, |col, val| col.lt(val)),
+                FieldFilter::Gte(m) => (m, |col, val| col.gte(val)),
+                FieldFilter::Lte(m) => (m, |col, val| col.lte(val)),
+                FieldFilter::Ne(m) => (m, |col, val| col.ne(val)),
+                FieldFilter::In(_) => unreachable!(),
+            };
 
-    let col = Expr::col((
-        Alias::new(metadata.left.table_name),
-        Alias::new(metadata.left.field_name),
-    ));
-    let value = datatype_to_sea_value(&metadata.right);
+            let col = Expr::col((
+                Alias::new(metadata.left.table_name),
+                Alias::new(metadata.left.field_name),
+            ));
+            let value = datatype_to_sea_value(&metadata.right);
 
-    build(col, value)
+            build(col, value)
+        }
+    }
 }
 
 pub fn select_stmt_to_sql<Db, FieldUnion, FieldPath, Fields, Mode>(
@@ -56,11 +66,13 @@ where
         query.column(Alias::new(*name));
     }
 
-    // Add ORDER BY fields not already in the SELECT list so the adapter
-    // can extract them as order keys.
-    for order in &stmt.order_by {
-        if !field_names.contains(&order.field) {
-            query.column(Alias::new(order.field));
+    // Only add ORDER BY fields to the SELECT list when the fetch mode
+    // needs order keys (fetch_all / fetch_many).
+    if stmt.mode.needs_order_keys() {
+        for order in &stmt.order_by {
+            if !field_names.contains(&order.field) {
+                query.column(Alias::new(order.field));
+            }
         }
     }
 
@@ -70,6 +82,37 @@ where
 
     for filter in &stmt.filters {
         query.and_where(filter_to_expr(filter));
+    }
+
+    // When similarity search is active, use CASE-based ordering by PK rank.
+    // This preserves the zvec similarity ranking in the SQL results.
+    // For typical topk sizes (10-100), CASE is the fastest approach in SQLite
+    // — no temp tables, no joins, just a few integer comparisons per row.
+    #[cfg(feature = "embeddings")]
+    if let Some(ref pk_order) = stmt.similarity_pk_order {
+        if !pk_order.is_empty() {
+            // Find the pk field from the In filter we injected
+            let pk_col = stmt
+                .filters
+                .iter()
+                .find_map(|f| {
+                    if let FieldFilter::In(m) = f {
+                        Some(m.left.field_name)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("");
+
+            let mut case = sea_query::CaseStatement::new();
+            for (i, pk) in pk_order.iter().enumerate() {
+                case = case.case(
+                    Expr::col(Alias::new(pk_col)).eq(pk.as_str()),
+                    Expr::val(i as i32),
+                );
+            }
+            query.order_by_expr(case.into(), sea_query::Order::Asc);
+        }
     }
 
     for order in &stmt.order_by {
@@ -225,7 +268,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            r#"SELECT "name", "age" FROM "users" ORDER BY "users"."age" ASC"#
+            r#"SELECT "name" FROM "users" ORDER BY "users"."age" ASC"#
         );
     }
 
@@ -254,7 +297,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            r#"SELECT "name", "age" FROM "users" ORDER BY "users"."age" DESC, "users"."name" ASC"#
+            r#"SELECT "name" FROM "users" ORDER BY "users"."age" DESC, "users"."name" ASC"#
         );
     }
 

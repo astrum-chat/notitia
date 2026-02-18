@@ -15,6 +15,9 @@ use unions::IsUnion;
 
 use crate::{Adapter, Database, FieldFilter, FieldKindGroup, Notitia, OrderBy};
 
+#[cfg(feature = "embeddings")]
+use crate::SimilaritySearch;
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SelectStmtBuilt<Db, FieldUnion, FieldPath, Fields, Mode>
@@ -29,6 +32,10 @@ where
     pub filters: SmallVec<[FieldFilter; 1]>,
     pub order_by: SmallVec<[OrderBy; 1]>,
     pub mode: Mode,
+    #[cfg(feature = "embeddings")]
+    pub similarity_search: Option<SimilaritySearch>,
+    #[cfg(feature = "embeddings")]
+    pub similarity_pk_order: Option<Vec<String>>,
     #[doc(hidden)]
     #[derivative(Debug = "ignore")]
     _database: PhantomData<Db>,
@@ -60,6 +67,10 @@ where
             filters,
             order_by: SmallVec::new(),
             mode,
+            #[cfg(feature = "embeddings")]
+            similarity_search: None,
+            #[cfg(feature = "embeddings")]
+            similarity_pk_order: None,
             _database: PhantomData,
             _path: PhantomData,
             _union: PhantomData,
@@ -79,6 +90,32 @@ where
             filters,
             order_by,
             mode,
+            #[cfg(feature = "embeddings")]
+            similarity_search: None,
+            #[cfg(feature = "embeddings")]
+            similarity_pk_order: None,
+            _database: PhantomData,
+            _path: PhantomData,
+            _union: PhantomData,
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    pub(crate) fn new_searched(
+        tables: SmallVec<[&'static str; 2]>,
+        fields: Fields,
+        filters: SmallVec<[FieldFilter; 1]>,
+        search: SimilaritySearch,
+        mode: Mode,
+    ) -> Self {
+        Self {
+            tables,
+            fields,
+            filters,
+            order_by: SmallVec::new(),
+            mode,
+            similarity_search: Some(search),
+            similarity_pk_order: None,
             _database: PhantomData,
             _path: PhantomData,
             _union: PhantomData,

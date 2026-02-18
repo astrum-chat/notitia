@@ -7,6 +7,12 @@ use crate::{
     utils::iter_join::Join,
 };
 
+pub struct EmbeddedTableDef {
+    pub table_name: &'static str,
+    pub embedded_fields: &'static [(&'static str, &'static str)],
+    pub pk_field: &'static str,
+}
+
 pub trait Database: Send + Sync + Sized {
     type TableKind: TableKind;
 
@@ -117,13 +123,117 @@ pub trait Database: Send + Sync + Sized {
             .join("\n\n")
     }
 
+    fn embedded_tables(&self) -> Vec<EmbeddedTableDef> {
+        Vec::new()
+    }
+
     fn new() -> Self;
 
     fn connect<Adptr: Adapter>(
-        url: &str,
-    ) -> impl Future<Output = Result<Notitia<Self, Adptr>, <Adptr as Adapter>::Error>> + Send {
-        async move { Adptr::open::<Self>(url).await }
+        options: impl Into<ConnectionOptions> + Send,
+    ) -> impl Future<Output = Result<Notitia<Self, Adptr>, ConnectionError<Adptr::Error>>> + Send
+    {
+        async move {
+            let options = options.into();
+
+            let db = Adptr::open::<Self>(&options.uri)
+                .await
+                .map_err(ConnectionError::Adapter)?;
+
+            #[cfg(feature = "embeddings")]
+            {
+                let embedded = db.database().embedded_tables();
+                if !embedded.is_empty() {
+                    let default_uri = options.default_embeddings_uri();
+                    let embeddings_uri = options.embeddings_uri.unwrap_or(default_uri);
+                    let embedder = options.embedder.ok_or(ConnectionError::EmbedderRequired)?;
+                    let manager = crate::embeddings::EmbeddingManager::new(
+                        &embeddings_uri,
+                        embedder,
+                        &embedded,
+                    )
+                    .map_err(|e| ConnectionError::Embeddings(e))?;
+                    db.set_embedding_manager(std::sync::Arc::new(manager));
+                }
+            }
+
+            Ok(db)
+        }
     }
+}
+
+pub struct ConnectionOptions {
+    pub uri: String,
+    pub embeddings_uri: Option<String>,
+    #[cfg(feature = "embeddings")]
+    pub(crate) embedder: Option<Box<dyn crate::embeddings::DatabaseEmbedder>>,
+}
+
+impl ConnectionOptions {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            embeddings_uri: None,
+            #[cfg(feature = "embeddings")]
+            embedder: None,
+        }
+    }
+
+    pub fn embeddings_uri(mut self, uri: impl Into<String>) -> Self {
+        self.embeddings_uri = Some(uri.into());
+        self
+    }
+
+    #[cfg(feature = "embeddings")]
+    pub fn embedder(
+        mut self,
+        embedder: impl crate::embeddings::DatabaseEmbedder + 'static,
+    ) -> Self {
+        self.embedder = Some(Box::new(embedder));
+        self
+    }
+
+    #[cfg(feature = "embeddings")]
+    fn default_embeddings_uri(&self) -> String {
+        let raw = self.uri.strip_prefix("sqlite:").unwrap_or(&self.uri);
+        let path = std::path::Path::new(raw);
+        let parent = path.parent().unwrap_or(std::path::Path::new("."));
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("db");
+        parent
+            .join(format!("{stem}_embeddings"))
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+impl From<&str> for ConnectionOptions {
+    fn from(uri: &str) -> Self {
+        Self::new(uri)
+    }
+}
+
+impl From<String> for ConnectionOptions {
+    fn from(uri: String) -> Self {
+        Self::new(uri)
+    }
+}
+
+impl From<&String> for ConnectionOptions {
+    fn from(uri: &String) -> Self {
+        Self::new(uri.clone())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectionError<E: std::error::Error> {
+    #[error("{0}")]
+    Adapter(E),
+    #[cfg(feature = "embeddings")]
+    #[error("this database has embedded fields but no embedder was provided")]
+    EmbedderRequired,
+    #[cfg(feature = "embeddings")]
+    #[error("embedding initialization failed: {0}")]
+    Embeddings(crate::embeddings::EmbeddingError),
 }
 
 impl Database for () {

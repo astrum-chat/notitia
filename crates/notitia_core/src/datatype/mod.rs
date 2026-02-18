@@ -188,6 +188,15 @@ pub struct OrderKey {
     pub reversed: SmallVec<[bool; 1]>,
 }
 
+impl Default for OrderKey {
+    fn default() -> Self {
+        Self {
+            values: SmallVec::new(),
+            reversed: SmallVec::new(),
+        }
+    }
+}
+
 impl OrderKey {
     pub fn new(values: SmallVec<[Datatype; 1]>, reversed: SmallVec<[bool; 1]>) -> Self {
         Self { values, reversed }

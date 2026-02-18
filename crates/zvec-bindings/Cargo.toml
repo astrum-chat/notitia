@@ -1,0 +1,18 @@
+[package]
+name = "zvec-bindings"
+version = "0.2.1"
+edition = "2021"
+description = "Idiomatic Rust bindings for zvec vector database"
+
+[dependencies]
+zvec-sys = { version = "0.2.1", path = "../zvec-sys" }
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1.4"
+
+[features]
+default = []
+static = ["zvec-sys/static"]
+sync = []

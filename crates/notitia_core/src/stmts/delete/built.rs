@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use unions::{IntoUnion, UnionPath};
 
 use crate::{
-    Adapter, Database, Datatype, FieldFilter, FieldKindOfDatabase, Mutation, MutationEvent,
+    Adapter, Database, FieldFilter, FieldKindOfDatabase, InnerFieldType, Mutation, MutationEvent,
     MutationEventKind, Notitia, Record, StrongFieldFilter,
 };
 
@@ -31,7 +31,7 @@ impl<Db: Database, Rec: Record> DeleteStmtBuilt<Db, Rec> {
     ) -> Self
     where
         Field: FieldKindOfDatabase<Db> + IntoUnion<Rec::FieldKind, FieldPath>,
-        T: Into<Datatype> + Clone,
+        T: InnerFieldType,
     {
         self.filters.push(filter.to_weak());
         self

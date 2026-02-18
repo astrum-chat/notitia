@@ -131,22 +131,26 @@ impl Adapter for SqliteAdapter {
             .fetch_all(self.connection.as_ref())
             .await?;
 
+        let needs_order_keys = stmt.mode.needs_order_keys();
         let field_names = stmt.fields.field_names();
         let user_field_count = field_names.len();
 
-        // Build column index mapping for ORDER BY fields.
-        // The SQL columns are: [user_fields..., extra_order_fields...].
-        // ORDER BY fields may be in either region.
-        let mut order_key_indices: SmallVec<[usize; 1]> = SmallVec::new();
-        let mut extra_col_idx = user_field_count;
-        for order in &stmt.order_by {
-            if let Some(pos) = field_names.iter().position(|n| *n == order.field) {
-                order_key_indices.push(pos);
-            } else {
-                order_key_indices.push(extra_col_idx);
-                extra_col_idx += 1;
+        // Build column index mapping for ORDER BY fields (only when needed).
+        let order_key_indices: SmallVec<[usize; 1]> = if needs_order_keys {
+            let mut indices = SmallVec::new();
+            let mut extra_col_idx = user_field_count;
+            for order in &stmt.order_by {
+                if let Some(pos) = field_names.iter().position(|n| *n == order.field) {
+                    indices.push(pos);
+                } else {
+                    indices.push(extra_col_idx);
+                    extra_col_idx += 1;
+                }
             }
-        }
+            indices
+        } else {
+            SmallVec::new()
+        };
 
         let (typed_rows, order_keys): (Vec<_>, Vec<_>) = rows
             .into_iter()
@@ -155,16 +159,20 @@ impl Adapter for SqliteAdapter {
                     .map(|i| sqlite_row_column_to_datatype(&row, i))
                     .collect();
 
-                let order_key = OrderKey::new(
-                    order_key_indices
-                        .iter()
-                        .map(|&idx| all_values[idx].clone())
-                        .collect(),
-                    stmt.order_by
-                        .iter()
-                        .map(|o| matches!(o.direction, notitia_core::OrderDirection::Desc))
-                        .collect(),
-                );
+                let order_key = if needs_order_keys {
+                    OrderKey::new(
+                        order_key_indices
+                            .iter()
+                            .map(|&idx| all_values[idx].clone())
+                            .collect(),
+                        stmt.order_by
+                            .iter()
+                            .map(|o| matches!(o.direction, notitia_core::OrderDirection::Desc))
+                            .collect(),
+                    )
+                } else {
+                    OrderKey::default()
+                };
 
                 let user_values: Vec<Datatype> =
                     all_values.into_iter().take(user_field_count).collect();
