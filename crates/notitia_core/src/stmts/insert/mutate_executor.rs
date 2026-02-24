@@ -1,4 +1,5 @@
 use crate::{Adapter, Database, Mutation, Notitia};
+use tracing::error;
 
 pub struct MutateExecutor<Db, Adptr, M>
 where
@@ -18,8 +19,12 @@ where
 {
     pub async fn execute(self) -> Result<M::Output, Adptr::Error> {
         let event = self.stmt.to_mutation_event();
-        let result = self.stmt.execute(&self.db).await?;
+        let result = self.stmt.execute(&self.db).await;
+        if let Err(ref err) = result {
+            error!("notitia mutation failed: {}", err);
+        }
+        let output = result?;
         self.db.notify_subscribers(&event);
-        Ok(result)
+        Ok(output)
     }
 }

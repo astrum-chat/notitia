@@ -1,0 +1,20 @@
+[package]
+name = "notitia_cli"
+version = "0.1.0"
+edition = "2024"
+license-file = "LICENSE.md"
+
+[[bin]]
+name = "notitia"
+path = "src/main.rs"
+
+[dependencies]
+notitia_migrations = { path = "../notitia_migrations" }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+glob = "0.3"
+
+[build-dependencies]
+toml = "0.8"

@@ -1,0 +1,98 @@
+use std::path::Path;
+
+use anyhow::Context;
+use notitia_migrations::SchemaString;
+
+pub fn read_crate_version() -> anyhow::Result<String> {
+    let contents =
+        std::fs::read_to_string("Cargo.toml").context("no Cargo.toml found in current directory")?;
+    let doc: toml::Table = toml::from_str(&contents).context("failed to parse Cargo.toml")?;
+    let version = doc
+        .get("package")
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .context("could not read [package] version from Cargo.toml")?;
+    Ok(version.to_string())
+}
+
+/// Returns the most recent snapshot's YAML content, or None if no snapshots exist.
+fn latest_snapshot(snapshots_dir: &Path, db_name: &str) -> anyhow::Result<Option<String>> {
+    let dir = snapshots_dir.join(db_name);
+    if !dir.exists() {
+        return Ok(None);
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        })
+        .collect();
+
+    if entries.is_empty() {
+        return Ok(None);
+    }
+
+    entries.sort_by_key(|e| e.file_name());
+    let last = entries.last().unwrap();
+    let contents = std::fs::read_to_string(last.path())?;
+    Ok(Some(contents))
+}
+
+/// Save a snapshot only if the schema has changed from the latest one.
+/// Returns the relative path if saved, or None if unchanged.
+pub fn save_snapshot(
+    snapshots_dir: &Path,
+    db_name: &str,
+    version: &str,
+    schema: &SchemaString,
+) -> anyhow::Result<Option<String>> {
+    if let Some(latest) = latest_snapshot(snapshots_dir, db_name)? {
+        if latest.trim() == schema.as_str().trim() {
+            return Ok(None);
+        }
+    }
+
+    let dir = snapshots_dir.join(db_name);
+    std::fs::create_dir_all(&dir)?;
+
+    let filename = format!("{version}.yml");
+    let path = dir.join(&filename);
+
+    std::fs::write(&path, schema.as_str())
+        .with_context(|| format!("failed to write snapshot to {}", path.display()))?;
+
+    Ok(Some(format!("{db_name}/{filename}")))
+}
+
+pub fn load_all_snapshots(
+    snapshots_dir: &Path,
+    db_name: &str,
+) -> anyhow::Result<Vec<(String, SchemaString)>> {
+    let dir = snapshots_dir.join(db_name);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        })
+        .collect();
+
+    entries.sort_by_key(|e| e.file_name());
+
+    let mut snapshots = Vec::new();
+    for entry in entries {
+        let contents = std::fs::read_to_string(entry.path())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        snapshots.push((name, SchemaString::new(contents)));
+    }
+
+    Ok(snapshots)
+}

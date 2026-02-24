@@ -82,6 +82,44 @@ impl Adapter for SqliteAdapter {
             .unwrap();
     }
 
+    async fn migrate<Db: Database>(&self, database: &Db) {
+        let table_names: Vec<&'static str> = database.tables().map(|(name, _)| name).collect();
+
+        let mut existing_columns = Vec::new();
+
+        for table_name in &table_names {
+            let sql = format!("PRAGMA table_info(\"{}\")", table_name);
+            let rows = sqlx::query(&sql)
+                .fetch_all(self.connection.as_ref())
+                .await
+                .unwrap_or_default();
+
+            let columns: Vec<String> = rows
+                .iter()
+                .map(|row| row.get::<String, _>("name"))
+                .collect();
+
+            existing_columns.push((*table_name, columns));
+        }
+
+        let migration_sql = database.migrate_sql(
+            Self::QueryBuilder::default(),
+            &existing_columns,
+        );
+
+        if !migration_sql.is_empty() {
+            for stmt in migration_sql.split(";\n") {
+                let stmt = stmt.trim_end_matches(';').trim();
+                if !stmt.is_empty() {
+                    sqlx::query(stmt)
+                        .execute(self.connection.as_ref())
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+    }
+
     async fn open<Db: Database>(url: &str) -> Result<Notitia<Db, Self>, Self::Error> {
         fn create_local_file(url: &str) -> std::io::Result<()> {
             if let Some(path) = url

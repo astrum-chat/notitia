@@ -13,6 +13,46 @@ pub struct EmbeddedTableDef {
     pub pk_field: &'static str,
 }
 
+pub struct TableMigrationMeta {
+    pub migrate_from: &'static [&'static str],
+    pub removed_fields: &'static [&'static str],
+    pub field_migrations: &'static [(&'static str, &'static [&'static str])],
+}
+
+pub(crate) fn set_column_metadata<'a>(
+    column: &'a mut sea_query::ColumnDef,
+    metadata: &DatatypeKindMetadata,
+) -> &'a mut sea_query::ColumnDef {
+    if metadata.primary_key {
+        column.primary_key();
+    }
+
+    if metadata.unique {
+        column.unique_key();
+    }
+
+    if !metadata.optional {
+        column.not_null();
+    }
+
+    column
+}
+
+pub(crate) fn set_column_type<'a>(
+    column: &'a mut sea_query::ColumnDef,
+    datatype: &DatatypeKind,
+) -> &'a mut sea_query::ColumnDef {
+    match datatype {
+        DatatypeKind::Int(metadata) => set_column_metadata(column.integer(), metadata),
+        DatatypeKind::BigInt(metadata) => set_column_metadata(column.big_integer(), metadata),
+        DatatypeKind::Float(metadata) => set_column_metadata(column.float(), metadata),
+        DatatypeKind::Double(metadata) => set_column_metadata(column.double(), metadata),
+        DatatypeKind::Text(metadata) => set_column_metadata(column.text(), metadata),
+        DatatypeKind::Blob(metadata) => set_column_metadata(column.blob(), metadata),
+        DatatypeKind::Bool(metadata) => set_column_metadata(column.boolean(), metadata),
+    }
+}
+
 pub trait Database: Send + Sync + Sized {
     type TableKind: TableKind;
 
@@ -21,45 +61,16 @@ pub trait Database: Send + Sync + Sized {
         phf::Map<&'static str, ForeignRelationship>,
     >;
 
+    const _REMOVED_TABLES: &'static [&'static str] = &[];
+    const _TABLE_MIGRATIONS: &'static [(&'static str, &'static [&'static str])] = &[];
+
     fn tables(&self) -> impl Iterator<Item = (&'static str, FieldsDef)>;
 
+    fn table_migration_metadata(&self) -> impl Iterator<Item = (&'static str, TableMigrationMeta)> {
+        std::iter::empty()
+    }
+
     fn schema_sql(&self, schema_builder: impl sea_query::SchemaBuilder) -> String {
-        fn set_column_metadata<'a>(
-            column: &'a mut sea_query::ColumnDef,
-            metadata: &DatatypeKindMetadata,
-        ) -> &'a mut sea_query::ColumnDef {
-            if metadata.primary_key {
-                column.primary_key();
-            }
-
-            if metadata.unique {
-                column.unique_key();
-            }
-
-            if !metadata.optional {
-                column.not_null();
-            }
-
-            column
-        }
-
-        fn set_column_type<'a>(
-            column: &'a mut sea_query::ColumnDef,
-            datatype: &DatatypeKind,
-        ) -> &'a mut sea_query::ColumnDef {
-            match datatype {
-                DatatypeKind::Int(metadata) => set_column_metadata(column.integer(), metadata),
-                DatatypeKind::BigInt(metadata) => {
-                    set_column_metadata(column.big_integer(), metadata)
-                }
-                DatatypeKind::Float(metadata) => set_column_metadata(column.float(), metadata),
-                DatatypeKind::Double(metadata) => set_column_metadata(column.double(), metadata),
-                DatatypeKind::Text(metadata) => set_column_metadata(column.text(), metadata),
-                DatatypeKind::Blob(metadata) => set_column_metadata(column.blob(), metadata),
-                DatatypeKind::Bool(metadata) => set_column_metadata(column.boolean(), metadata),
-            }
-        }
-
         fn set_relationship_on_delete<'a>(
             relationship: &'a mut sea_query::ForeignKeyCreateStatement,
             on_delete: &OnAction,
@@ -121,6 +132,40 @@ pub trait Database: Send + Sync + Sized {
                 format!("{};", table.build_any(&schema_builder))
             })
             .join("\n\n")
+    }
+
+    fn migrate_sql(
+        &self,
+        schema_builder: impl sea_query::SchemaBuilder,
+        existing_columns: &[(&str, Vec<String>)],
+    ) -> String {
+        let mut stmts = Vec::new();
+
+        for (table_name, rows) in self.tables() {
+            let existing = existing_columns
+                .iter()
+                .find(|(name, _)| *name == table_name)
+                .map(|(_, cols)| cols.as_slice())
+                .unwrap_or(&[]);
+
+            for (field_name, datatype) in rows.iter() {
+                if existing.iter().any(|c| c == field_name) {
+                    continue;
+                }
+
+                let stmt = sea_query::Table::alter()
+                    .table(table_name)
+                    .add_column(set_column_type(
+                        &mut sea_query::ColumnDef::new(*field_name),
+                        datatype,
+                    ))
+                    .to_owned();
+
+                stmts.push(format!("{};", stmt.build_any(&schema_builder)));
+            }
+        }
+
+        stmts.join("\n")
     }
 
     fn embedded_tables(&self) -> Vec<EmbeddedTableDef> {

@@ -30,7 +30,7 @@ name = "example"
 required-features = ["notitia/embeddings"]
 
 [workspace]
-members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "crates/notitia_sqlite", "crates/unions", "crates/notitia_gpui", "crates/ordered_map", "crates/zvec-sys", "crates/zvec-bindings"]
+members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "crates/notitia_sqlite", "crates/unions", "crates/notitia_gpui", "crates/ordered_map", "crates/zvec-sys", "crates/zvec-bindings", "crates/notitia_migrations", "crates/notitia_cli"]
 
 [workspace.dependencies]
 # Local.

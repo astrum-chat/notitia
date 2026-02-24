@@ -5,7 +5,7 @@ use proc_macro2::Span;
 use quote::quote;
 use syn::{Fields, GenericArgument, Ident, ItemStruct, PathArguments, Type, parse_macro_input};
 
-use crate::utils::get_attr_idx;
+use crate::utils::{get_attr_idx, get_migrate_from_attr, parse_ident_list_attr};
 #[cfg(feature = "embeddings")]
 use crate::utils::get_embed_attr;
 
@@ -32,7 +32,9 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
     }
 }
 
-pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn impl_record(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let removed_fields = parse_ident_list_attr(attr, "removed_fields");
+
     let input = parse_macro_input!(item as ItemStruct);
     let name = &input.ident;
     let vis = &input.vis;
@@ -46,6 +48,9 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Track the primary key field name for _PK_FIELD const.
     let mut pk_field_name: Option<String> = None;
+
+    // Collect field migration metadata: (current_field_name, [old_names]).
+    let mut field_migrations: Vec<(String, Vec<String>)> = Vec::new();
 
     // Collect embed field metadata (field_name, metric_str) for _EMBEDDED_FIELDS const.
     #[cfg(feature = "embeddings")]
@@ -91,6 +96,13 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let field_ty = &field.ty;
 
             let mut field_attrs = field.attrs.iter().collect::<Vec<_>>();
+
+            // Strip and collect migrate_from if present.
+            if let Some((mf_idx, old_names)) = get_migrate_from_attr(field_attrs.as_slice(), "db") {
+                field_attrs.remove(mf_idx);
+                let fname = field_name.as_ref().unwrap().to_string();
+                field_migrations.push((fname, old_names));
+            }
 
             if let Some(attr_idx) = get_attr_idx(field_attrs.as_slice(), "db", "primary_key") {
                 field_attrs.remove(attr_idx);
@@ -473,6 +485,19 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
     #[cfg(not(feature = "embeddings"))]
     let embedded_fields_const = quote! {};
 
+    // Generate migration consts, gated behind #[cfg(feature = "migrations")].
+    let removed_fields_tokens = {
+        let items = removed_fields.iter().map(|s| quote! { #s });
+        quote! { &[#(#items),*] }
+    };
+    let field_migrations_tokens = {
+        let entries = field_migrations.iter().map(|(current, old_names)| {
+            let old_items = old_names.iter().map(|s| quote! { #s });
+            quote! { (#current, &[#(#old_items),*] as &[&str]) }
+        });
+        quote! { &[#(#entries),*] }
+    };
+
     let expanded = quote! {
         #[derive(Clone)]
         #vis struct #name #generics {
@@ -492,6 +517,9 @@ pub fn impl_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
             const _FIELDS: std::sync::LazyLock<Box<[(&'static str, notitia::DatatypeKind)]>> =
                 std::sync::LazyLock::new(|| Box::new([#(#field_datatype_kinds),*]));
+
+            const _REMOVED_FIELDS: &'static [&'static str] = #removed_fields_tokens;
+            const _FIELD_MIGRATIONS: &'static [(&'static str, &'static [&'static str])] = #field_migrations_tokens;
 
             fn into_datatypes(self) -> Vec<(&'static str, notitia::Datatype)> {
                 vec![#(#field_into_datatypes),*]

@@ -16,6 +16,8 @@ pub trait Adapter: Sized + Send + Sync {
 
     fn initialize<Db: Database>(&self, database: &Db) -> impl Future<Output = ()> + Send;
 
+    fn migrate<Db: Database>(&self, database: &Db) -> impl Future<Output = ()> + Send;
+
     fn open<Db: Database>(
         url: &str,
     ) -> impl Future<Output = Result<Notitia<Db, Self>, Self::Error>> + Send;

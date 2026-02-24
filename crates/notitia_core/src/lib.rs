@@ -82,6 +82,7 @@ where
 {
     pub async fn new(database: Db, adapter: Adptr) -> Self {
         adapter.initialize(&database).await;
+        adapter.migrate(&database).await;
 
         Self {
             inner: Arc::new(NotitiaInner {

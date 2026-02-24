@@ -13,7 +13,11 @@ use syn::{
     Type, TypePath, parse::ParseBuffer, parse_macro_input,
 };
 
-pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
+use crate::utils::{get_migrate_from_attr, parse_ident_list_attr};
+
+pub fn impl_database(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let removed_tables = parse_ident_list_attr(attr, "removed_tables");
+
     let input = parse_macro_input!(item as ItemStruct);
     let database_name = &input.ident;
     let vis = &input.vis;
@@ -33,6 +37,9 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut tables_method_items = vec![];
     let mut embedding_table_entries: Vec<(String, &Type)> = vec![];
     let _ = &embedding_table_entries; // suppress unused warning when embeddings feature is off
+
+    // Collect table migration metadata: (current_table_name, [old_names], record_type).
+    let mut table_migrations: Vec<(String, Vec<String>, &Type)> = vec![];
 
     let mut table_kinds = vec![];
     let mut table_kinds_consts = vec![];
@@ -56,8 +63,18 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
+        // Strip and collect migrate_from if present.
+        let mut migrate_from_names: Vec<String> = Vec::new();
+        if let Some((mf_idx, old_names)) = get_migrate_from_attr(table_field_attrs.as_slice(), "db") {
+            table_field_attrs.remove(mf_idx);
+            migrate_from_names = old_names;
+        }
+
         if let Some(table_field_name) = table_field_name {
             let table_field_name_string = table_field_name.to_string();
+
+            // Track table migrations.
+            table_migrations.push((table_field_name_string.clone(), migrate_from_names, record_ty));
 
             let upper_snake_table_field_name_string = Ident::new(
                 &table_field_name_string.to_case(Case::UpperSnake),
@@ -216,6 +233,33 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
     #[cfg(not(feature = "embeddings"))]
     let embedded_tables_override = quote! {};
 
+    // Generate migration consts, gated behind #[cfg(feature = "migrations")].
+    let removed_tables_tokens = {
+        let items = removed_tables.iter().map(|s| quote! { #s });
+        quote! { &[#(#items),*] }
+    };
+    let table_migrations_tokens = {
+        let entries = table_migrations.iter()
+            .filter(|(_, old_names, _)| !old_names.is_empty())
+            .map(|(current, old_names, _)| {
+                let old_items = old_names.iter().map(|s| quote! { #s });
+                quote! { (#current, &[#(#old_items),*] as &[&str]) }
+            });
+        quote! { &[#(#entries),*] }
+    };
+
+    // Generate table_migration_metadata() items.
+    let migration_metadata_items = table_migrations.iter().map(|(table_name, old_names, record_ty)| {
+        let old_items = old_names.iter().map(|s| quote! { #s });
+        quote! {
+            (#table_name, notitia::TableMigrationMeta {
+                migrate_from: &[#(#old_items),*],
+                removed_fields: <#record_ty as notitia::Record>::_REMOVED_FIELDS,
+                field_migrations: <#record_ty as notitia::Record>::_FIELD_MIGRATIONS,
+            })
+        }
+    });
+
     let expanded = quote! {
         #vis struct #database_name #generics {
             #(#fields),*
@@ -244,6 +288,13 @@ pub fn impl_database(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             #embedded_tables_override
+
+            const _REMOVED_TABLES: &'static [&'static str] = #removed_tables_tokens;
+            const _TABLE_MIGRATIONS: &'static [(&'static str, &'static [&'static str])] = #table_migrations_tokens;
+
+            fn table_migration_metadata(&self) -> impl Iterator<Item = (&'static str, notitia::TableMigrationMeta)> {
+                [#(#migration_metadata_items),*].into_iter()
+            }
         }
 
         impl #generics #database_name #generics {

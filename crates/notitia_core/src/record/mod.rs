@@ -16,6 +16,9 @@ pub trait Record: Clone {
 
     const _FIELDS: FieldsDef;
 
+    const _REMOVED_FIELDS: &'static [&'static str] = &[];
+    const _FIELD_MIGRATIONS: &'static [(&'static str, &'static [&'static str])] = &[];
+
     fn into_datatypes(self) -> Vec<(&'static str, Datatype)>;
 }
 

@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use tracing::error;
 use unions::IsUnion;
 
 use crate::{
@@ -37,7 +38,11 @@ where
         #[cfg(feature = "embeddings")]
         self.resolve_similarity_search();
 
-        self.stmt.execute(&self.db).await
+        let result = self.stmt.execute(&self.db).await;
+        if let Err(ref err) = result {
+            error!("notitia query failed: {}", err);
+        }
+        result
     }
 
     #[cfg(feature = "embeddings")]
