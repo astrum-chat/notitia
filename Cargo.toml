@@ -34,20 +34,20 @@ members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "cr
 
 [workspace.dependencies]
 # Local.
-notitia = { path = "crates/notitia" }
-notitia_core = { path = "crates/notitia_core" }
-notitia_macros = { path = "crates/notitia_macros" }
-notitia_sqlite = { path = "crates/notitia_sqlite", default-features = false }
-notitia_gpui = { path = "crates/notitia_gpui" }
-unions = { path = "crates/unions" }
-ordered_map = { path = "crates/ordered_map" }
+# notitia = { path = "crates/notitia" }
+# notitia_core = { path = "crates/notitia_core" }
+# notitia_macros = { path = "crates/notitia_macros" }
+# notitia_sqlite = { path = "crates/notitia_sqlite", # default-features = false }
+# notitia_gpui = { path = "crates/notitia_gpui" }
+# unions = { path = "crates/unions" }
+# ordered_map = { path = "crates/ordered_map" }
 # Public.
-# notitia = { git = "https://github.com/astrum-chat/notitia" }
-# notitia_core = { git = "https://github.com/astrum-chat/notitia" }
-# notitia_macros = { git = "https://github.com/astrum-chat/notitia" }
-# notitia_sqlite = { git = "https://github.com/astrum-chat/notitia", default-features = false }
-# notitia_gpui = { git = "https://github.com/astrum-chat/notitia" }
-# unions = { git = "https://github.com/astrum-chat/notitia" }
+notitia = { git = "https://github.com/astrum-chat/notitia" }
+notitia_core = { git = "https://github.com/astrum-chat/notitia" }
+notitia_macros = { git = "https://github.com/astrum-chat/notitia" }
+notitia_sqlite = { git = "https://github.com/astrum-chat/notitia", default-features = false }
+notitia_gpui = { git = "https://github.com/astrum-chat/notitia" }
+unions = { git = "https://github.com/astrum-chat/notitia" }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed" }
