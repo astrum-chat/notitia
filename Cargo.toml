@@ -37,7 +37,7 @@ members = ["crates/notitia_core", "crates/notitia_macros", "crates/notitia", "cr
 # notitia = { path = "crates/notitia" }
 # notitia_core = { path = "crates/notitia_core" }
 # notitia_macros = { path = "crates/notitia_macros" }
-# notitia_sqlite = { path = "crates/notitia_sqlite", # default-features = false }
+# notitia_sqlite = { path = "crates/notitia_sqlite", default-features = false }
 # notitia_gpui = { path = "crates/notitia_gpui" }
 # unions = { path = "crates/unions" }
 # ordered_map = { path = "crates/ordered_map" }
