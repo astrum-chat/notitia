@@ -136,7 +136,86 @@ let event = subscription.recv()?;
 let updated_data = subscription.data();
 ```
 
-## Fetch Modes
+<details>
+<summary><h2>Migrations</h2></summary>
+
+Notitia tracks schema changes through YAML snapshots and checks compatibility between versions to catch breaking changes before they ship.
+
+### Setup
+
+```sh
+notitia init
+```
+
+This creates a `snapshots/` directory and a `notitia.toml` config file in your project.
+
+### Taking Snapshots
+
+```sh
+notitia snapshot
+```
+
+Extracts the current schema from your database types and saves a versioned YAML snapshot. The command checks compatibility against all existing snapshots first — if any breaking changes are detected, the snapshot is rejected.
+
+### Checking Compatibility
+
+```sh
+notitia check
+```
+
+Validates your current schema against all existing snapshots and reports any incompatibilities with actionable hints.
+
+### Renaming Tables & Fields
+
+Use `#[db(migrate_from(...))]` to tell the migration system that a table or field was renamed rather than removed:
+
+```rust
+#[database]
+struct MyDb {
+    #[db(migrate_from(legacy_users))]
+    users: Table<User>,
+}
+
+#[record]
+struct User {
+    #[db(migrate_from(user_id))]
+    id: String,
+    name: String,
+}
+```
+
+### Removing Tables & Fields
+
+Declare intentional removals so the compatibility checker doesn't flag them as errors:
+
+```rust
+#[database(removed_tables(old_sessions))]
+struct MyDb {
+    users: Table<User>,
+}
+
+#[record(removed_fields(legacy_field))]
+struct User {
+    #[db(primary_key)]
+    id: String,
+    name: String,
+}
+```
+
+### CLI Flags
+
+| Flag | Effect |
+|---|---|
+| `-v, --verbose` | Show full cargo output during schema extraction |
+| `--tmp` | Use a temporary directory instead of `.notitia/` |
+| `-c, --crate <NAME>` | Target a specific workspace member by name |
+
+</details>
+
+## Reference
+
+<details>
+<summary>Fetch Modes</summary>
 
 | Method | Returns |
 |---|---|
@@ -145,7 +224,10 @@ let updated_data = subscription.data();
 | `.fetch_all::<Vec<_>>()` | All matching rows |
 | `.fetch_many::<Vec<_>>(n)` | Up to `n` rows |
 
-## Filter Operators
+</details>
+
+<details>
+<summary>Filter Operators</summary>
 
 | Method | Meaning |
 |---|---|
@@ -156,14 +238,20 @@ let updated_data = subscription.data();
 | `.gte(val)` | Greater than or equal to |
 | `.lte(val)` | Less than or equal to |
 
-## Record Attributes
+</details>
+
+<details>
+<summary>Record Attributes</summary>
 
 | Attribute | Effect |
 |---|---|
 | `#[db(primary_key)]` | Marks the field as a primary key |
 | `#[db(unique)]` | Adds a unique constraint |
 
-## Custom Types
+</details>
+
+<details>
+<summary>Custom Types</summary>
 
 To use a custom type in a record, implement `AsDatatypeKind`, `Into<Datatype>`, and `TryFrom<Datatype>`:
 
@@ -193,3 +281,5 @@ impl TryFrom<Datatype> for MyId {
     }
 }
 ```
+
+</details>
