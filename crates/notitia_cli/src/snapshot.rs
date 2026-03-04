@@ -2,6 +2,14 @@ use std::path::Path;
 
 use anyhow::Context;
 use notitia_migrations::SchemaString;
+use semver::Version;
+
+/// Parse a semver version from a filename like "0.1.12.yml".
+fn version_from_filename(name: &std::ffi::OsStr) -> Option<Version> {
+    let s = name.to_str()?;
+    let stem = s.strip_suffix(".yml").or_else(|| s.strip_suffix(".yaml"))?;
+    Version::parse(stem).ok()
+}
 
 pub fn read_crate_version() -> anyhow::Result<String> {
     let contents =
@@ -35,7 +43,11 @@ fn latest_snapshot(snapshots_dir: &Path, db_name: &str) -> anyhow::Result<Option
         return Ok(None);
     }
 
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by(|a, b| {
+        let va = version_from_filename(&a.file_name());
+        let vb = version_from_filename(&b.file_name());
+        va.cmp(&vb)
+    });
     let last = entries.last().unwrap();
     let contents = std::fs::read_to_string(last.path())?;
     Ok(Some(contents))
@@ -50,11 +62,13 @@ pub fn save_snapshot(
     schema: &SchemaString,
 ) -> anyhow::Result<Option<String>> {
     if let Some(latest) = latest_snapshot(snapshots_dir, db_name)? {
-        let latest_schema = SchemaString::new(latest).parse()?;
+        let latest_schema = SchemaString::new(latest.clone()).parse()?;
         let current_schema = schema.parse()?;
         if latest_schema == current_schema {
             return Ok(None);
         }
+        eprintln!("--- latest snapshot ---\n{latest}");
+        eprintln!("--- current schema ---\n{}", schema.as_str());
     }
 
     let dir = snapshots_dir.join(db_name);
@@ -87,7 +101,11 @@ pub fn load_all_snapshots(
         })
         .collect();
 
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by(|a, b| {
+        let va = version_from_filename(&a.file_name());
+        let vb = version_from_filename(&b.file_name());
+        va.cmp(&vb)
+    });
 
     let mut snapshots = Vec::new();
     for entry in entries {
