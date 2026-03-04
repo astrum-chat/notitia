@@ -50,7 +50,9 @@ pub fn save_snapshot(
     schema: &SchemaString,
 ) -> anyhow::Result<Option<String>> {
     if let Some(latest) = latest_snapshot(snapshots_dir, db_name)? {
-        if latest.trim() == schema.as_str().trim() {
+        let latest_schema = SchemaString::new(latest).parse()?;
+        let current_schema = schema.parse()?;
+        if latest_schema == current_schema {
             return Ok(None);
         }
     }
